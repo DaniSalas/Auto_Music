@@ -34,9 +34,9 @@ class MainActivity : ComponentActivity() {
             "music_db"
         ).build()
 
-        // Instancia pública de Invidious que no requiere API Key
+        // Usamos la API de Piped que es más estable para búsquedas
         val retrofit = Retrofit.Builder()
-            .baseUrl("https://invidious.snopyta.org/") 
+            .baseUrl("https://pipedapi.kavin.rocks/")
             .addConverterFactory(GsonConverterFactory.create())
             .build()
         val youtubeService = retrofit.create(YouTubeService::class.java)

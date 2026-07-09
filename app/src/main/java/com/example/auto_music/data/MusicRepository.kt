@@ -1,6 +1,10 @@
 package com.example.auto_music.data
 
+import android.app.DownloadManager
 import android.content.Context
+import android.net.Uri
+import android.os.Environment
+import android.util.Log
 import com.example.auto_music.data.local.MusicDao
 import com.example.auto_music.data.remote.YouTubeService
 import com.example.auto_music.model.Playlist
@@ -19,19 +23,23 @@ class MusicRepository(
 
     suspend fun searchSongs(query: String): List<Song> {
         return try {
+            Log.d("MusicRepository", "Searching for: $query")
             val response = youtubeService.searchVideos(query = query)
-            response.map { item ->
+            response.items.mapNotNull { item ->
+                val videoId = item.url?.substringAfter("v=") ?: return@mapNotNull null
                 Song(
-                    id = item.videoId,
-                    title = item.title,
-                    artist = item.author,
-                    thumbnailUrl = item.videoThumbnails.firstOrNull { it.width > 300 }?.url 
-                        ?: item.videoThumbnails.firstOrNull()?.url ?: "",
+                    id = videoId,
+                    title = item.title ?: "Unknown",
+                    artist = item.uploaderName ?: "Unknown",
+                    thumbnailUrl = item.thumbnail ?: "",
                     audioUrl = null,
-                    duration = 0
+                    duration = item.duration ?: 0
                 )
+            }.also {
+                Log.d("MusicRepository", "Found ${it.size} results")
             }
         } catch (e: Exception) {
+            Log.e("MusicRepository", "Search failed", e)
             emptyList()
         }
     }
@@ -53,11 +61,34 @@ class MusicRepository(
         return musicDao.getSongsInPlaylist(playlistId)
     }
 
-    private suspend fun downloadSong(song: Song) {
-        // La lógica de descarga se puede implementar con librerías gratuitas 
-        // que extraigan el audio del video de YouTube sin usar la API de Google.
-        val file = File(context.getExternalFilesDir(null), "${song.id}.mp3")
-        val updatedSong = song.copy(audioUrl = file.absolutePath, isDownloaded = true)
-        musicDao.insertSong(updatedSong)
+    private fun downloadSong(song: Song) {
+        try {
+            val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            
+            // Usamos una URL de stream de Piped (esto puede variar por instancia)
+            val audioStreamUrl = "https://pipedapi.kavin.rocks/streams/${song.id}"
+            
+            val directory = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Auto_Music")
+            if (!directory.exists()) {
+                directory.mkdirs()
+            }
+
+            val fileName = "${song.title.replace(Regex("[\\\\/:*?\"<>|]"), "_")}.mp3"
+            val file = File(directory, fileName)
+
+            val request = DownloadManager.Request(Uri.parse(audioStreamUrl))
+                .setTitle("Downloading ${song.title}")
+                .setDescription("Auto Music Download")
+                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                .setDestinationUri(Uri.fromFile(file))
+                .setAllowedOverMetered(true)
+                .setAllowedOverRoaming(true)
+
+            downloadManager.enqueue(request)
+
+            Log.d("MusicRepository", "Download queued to: ${file.absolutePath}")
+        } catch (e: Exception) {
+            Log.e("MusicRepository", "Download failed to queue", e)
+        }
     }
 }

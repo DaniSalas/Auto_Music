@@ -17,7 +17,7 @@ import com.example.auto_music.model.Song
 import com.example.auto_music.ui.MainViewModel
 
 @Composable
-fun SearchScreen(viewModel: MainViewModel, apiKey: String, onPlay: (Song) -> Unit) {
+fun SearchScreen(viewModel: MainViewModel, onPlay: (Song) -> Unit) {
     var query by remember { mutableStateOf("") }
     val searchResults by viewModel.searchResults.collectAsState()
     val playlists by viewModel.playlists.collectAsState()
@@ -31,7 +31,7 @@ fun SearchScreen(viewModel: MainViewModel, apiKey: String, onPlay: (Song) -> Uni
             modifier = Modifier.fillMaxWidth(),
             label = { Text("Search by title, artist, or lyrics") },
             trailingIcon = {
-                IconButton(onClick = { viewModel.search(query, apiKey) }) {
+                IconButton(onClick = { viewModel.search(query) }) {
                     Icon(Icons.Default.Search, contentDescription = "Search")
                 }
             }

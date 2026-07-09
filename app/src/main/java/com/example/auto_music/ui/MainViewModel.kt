@@ -26,9 +26,9 @@ class MainViewModel(private val repository: MusicRepository) : ViewModel() {
         }
     }
 
-    fun search(query: String, apiKey: String) {
+    fun search(query: String) {
         viewModelScope.launch {
-            _searchResults.value = repository.searchSongs(query, apiKey)
+            _searchResults.value = repository.searchSongs(query)
         }
     }
 

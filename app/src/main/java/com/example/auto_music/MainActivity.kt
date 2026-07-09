@@ -33,8 +33,10 @@ class MainActivity : ComponentActivity() {
             MusicDatabase::class.java,
             "music_db"
         ).build()
+
+        // Instancia pública de Invidious que no requiere API Key
         val retrofit = Retrofit.Builder()
-            .baseUrl("https://www.googleapis.com/youtube/v3/")
+            .baseUrl("https://invidious.snopyta.org/") 
             .addConverterFactory(GsonConverterFactory.create())
             .build()
         val youtubeService = retrofit.create(YouTubeService::class.java)
@@ -70,8 +72,7 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun MainApp(viewModel: MainViewModel, controller: androidx.media3.session.MediaController?) {
-    var currentScreen by remember { mutableStateOf(0) }
-    val apiKey = "YOUR_YOUTUBE_API_KEY" // Placeholder
+    var currentScreen by remember { mutableIntStateOf(0) }
 
     Scaffold(
         bottomBar = {
@@ -93,7 +94,7 @@ fun MainApp(viewModel: MainViewModel, controller: androidx.media3.session.MediaC
     ) { innerPadding ->
         Surface(modifier = Modifier.padding(innerPadding)) {
             when (currentScreen) {
-                0 -> SearchScreen(viewModel, apiKey, onPlay = { song ->
+                0 -> SearchScreen(viewModel, onPlay = { song ->
                     controller?.let {
                         val mediaItem = androidx.media3.common.MediaItem.Builder()
                             .setMediaId(song.id)
@@ -110,7 +111,7 @@ fun MainApp(viewModel: MainViewModel, controller: androidx.media3.session.MediaC
                         it.play()
                     }
                 })
-                1 -> PlaylistsScreen(viewModel, onPlaylistClick = { /* Navigate to playlist songs */ })
+                1 -> PlaylistsScreen(viewModel, onPlaylistClick = { /* Ver canciones de la lista */ })
             }
         }
     }

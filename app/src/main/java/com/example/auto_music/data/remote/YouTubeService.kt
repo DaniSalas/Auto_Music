@@ -4,42 +4,22 @@ import retrofit2.http.GET
 import retrofit2.http.Query
 
 interface YouTubeService {
-    @GET("search")
+    // Usaremos la API de Invidious que no requiere clave
+    @GET("api/v1/search")
     suspend fun searchVideos(
-        @Query("part") part: String = "snippet",
         @Query("q") query: String,
-        @Query("type") type: String = "video",
-        @Query("videoCategoryId") category: String = "10", // Music
-        @Query("maxResults") maxResults: Int = 20,
-        @Query("key") apiKey: String
-    ): YouTubeSearchResponse
+        @Query("type") type: String = "video"
+    ): List<InvidiousVideoItem>
 }
 
-data class YouTubeSearchResponse(
-    val items: List<YouTubeVideoItem>
-)
-
-data class YouTubeVideoItem(
-    val id: VideoId,
-    val snippet: Snippet
-)
-
-data class VideoId(
-    val videoId: String
-)
-
-data class Snippet(
+data class InvidiousVideoItem(
+    val videoId: String,
     val title: String,
-    val channelTitle: String,
-    val thumbnails: Thumbnails
+    val author: String,
+    val videoThumbnails: List<InvidiousThumbnail>
 )
 
-data class Thumbnails(
-    val default: ThumbnailDetails,
-    val medium: ThumbnailDetails,
-    val high: ThumbnailDetails
-)
-
-data class ThumbnailDetails(
-    val url: String
+data class InvidiousThumbnail(
+    val url: String,
+    val width: Int
 )

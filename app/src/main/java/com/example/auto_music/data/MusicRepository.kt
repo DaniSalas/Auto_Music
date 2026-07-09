@@ -17,17 +17,22 @@ class MusicRepository(
     val allPlaylists: Flow<List<Playlist>> = musicDao.getAllPlaylists()
     val allSongs: Flow<List<Song>> = musicDao.getAllSongs()
 
-    suspend fun searchSongs(query: String, apiKey: String): List<Song> {
-        val response = youtubeService.searchVideos(query = query, apiKey = apiKey)
-        return response.items.map { item ->
-            Song(
-                id = item.id.videoId,
-                title = item.snippet.title,
-                artist = item.snippet.channelTitle,
-                thumbnailUrl = item.snippet.thumbnails.high.url,
-                audioUrl = null,
-                duration = 0 // Needs another API call for contentDetails if needed
-            )
+    suspend fun searchSongs(query: String): List<Song> {
+        return try {
+            val response = youtubeService.searchVideos(query = query)
+            response.map { item ->
+                Song(
+                    id = item.videoId,
+                    title = item.title,
+                    artist = item.author,
+                    thumbnailUrl = item.videoThumbnails.firstOrNull { it.width > 300 }?.url 
+                        ?: item.videoThumbnails.firstOrNull()?.url ?: "",
+                    audioUrl = null,
+                    duration = 0
+                )
+            }
+        } catch (e: Exception) {
+            emptyList()
         }
     }
 
@@ -39,7 +44,6 @@ class MusicRepository(
         musicDao.insertSong(song)
         musicDao.insertSongToPlaylist(PlaylistSongCrossRef(playlistId, song.id))
         
-        // Trigger download if not downloaded
         if (!song.isDownloaded) {
             downloadSong(song)
         }
@@ -50,11 +54,9 @@ class MusicRepository(
     }
 
     private suspend fun downloadSong(song: Song) {
-        // Placeholder for download logic.
-        // In a real app, you'd use a YouTube audio extractor and Media3 DownloadManager.
+        // La lógica de descarga se puede implementar con librerías gratuitas 
+        // que extraigan el audio del video de YouTube sin usar la API de Google.
         val file = File(context.getExternalFilesDir(null), "${song.id}.mp3")
-        // logic to download stream to file...
-        
         val updatedSong = song.copy(audioUrl = file.absolutePath, isDownloaded = true)
         musicDao.insertSong(updatedSong)
     }

@@ -6,12 +6,12 @@ plugins {
 
 android {
     namespace = "com.example.auto_music"
-    compileSdk = 37
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.example.auto_music"
         minSdk = 26
-        targetSdk = 37
+        targetSdk = 35
         versionCode = 1
         versionName = "1.0"
 

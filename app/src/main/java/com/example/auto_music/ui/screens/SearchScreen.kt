@@ -20,6 +20,7 @@ import com.example.auto_music.ui.MainViewModel
 fun SearchScreen(viewModel: MainViewModel, onPlay: (Song) -> Unit) {
     var query by remember { mutableStateOf("") }
     val searchResults by viewModel.searchResults.collectAsState()
+    val isLoading by viewModel.isLoading.collectAsState()
     val playlists by viewModel.playlists.collectAsState()
     var selectedSong by remember { mutableStateOf<Song?>(null) }
     var showPlaylistDialog by remember { mutableStateOf(false) }
@@ -39,16 +40,22 @@ fun SearchScreen(viewModel: MainViewModel, onPlay: (Song) -> Unit) {
         
         Spacer(modifier = Modifier.height(16.dp))
         
-        LazyColumn {
-            items(searchResults) { song ->
-                SongItem(
-                    song = song,
-                    onPlay = { onPlay(song) },
-                    onAddToPlaylist = {
-                        selectedSong = song
-                        showPlaylistDialog = true
-                    }
-                )
+        if (isLoading) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
+            }
+        } else {
+            LazyColumn {
+                items(searchResults) { song ->
+                    SongItem(
+                        song = song,
+                        onPlay = { onPlay(song) },
+                        onAddToPlaylist = {
+                            selectedSong = song
+                            showPlaylistDialog = true
+                        }
+                    )
+                }
             }
         }
     }

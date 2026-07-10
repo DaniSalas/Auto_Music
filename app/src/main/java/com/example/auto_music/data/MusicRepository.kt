@@ -26,6 +26,9 @@ class MusicRepository(
             Log.d("MusicRepository", "Searching for: $query")
             val response = youtubeService.searchVideos(query = query)
             response.items.mapNotNull { item ->
+                // Solo procesamos elementos de tipo stream (videos)
+                if (item.type != "stream" && item.type != null) return@mapNotNull null
+                
                 val videoId = item.url?.substringAfter("v=") ?: return@mapNotNull null
                 Song(
                     id = videoId,
@@ -65,8 +68,8 @@ class MusicRepository(
         try {
             val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
             
-            // Usamos una URL de stream de Piped (esto puede variar por instancia)
-            val audioStreamUrl = "https://pipedapi.kavin.rocks/streams/${song.id}"
+            // Usamos la instancia de Garuda Linux para mayor velocidad
+            val audioStreamUrl = "https://piped-api.garudalinux.org/streams/${song.id}"
             
             val directory = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Auto_Music")
             if (!directory.exists()) {

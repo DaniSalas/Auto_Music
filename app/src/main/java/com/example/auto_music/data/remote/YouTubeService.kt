@@ -4,7 +4,6 @@ import retrofit2.http.GET
 import retrofit2.http.Query
 
 interface YouTubeService {
-    // Probamos con la API de Piped, que suele ser más estable que Invidious
     @GET("search")
     suspend fun searchVideos(
         @Query("q") query: String,
@@ -17,9 +16,10 @@ data class PipedSearchResponse(
 )
 
 data class PipedVideoItem(
-    val url: String?, // Contiene "/watch?v=..."
+    val url: String?, 
     val title: String?,
     val uploaderName: String?,
     val thumbnail: String?,
-    val duration: Long?
+    val duration: Long?,
+    val type: String? // "stream", "playlist", etc.
 )

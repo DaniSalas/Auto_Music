@@ -20,8 +20,10 @@ import com.example.auto_music.ui.MainViewModel
 import com.example.auto_music.ui.screens.PlaylistsScreen
 import com.example.auto_music.ui.screens.SearchScreen
 import com.example.auto_music.ui.theme.Auto_MusicTheme
+import okhttp3.OkHttpClient
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
+import java.util.concurrent.TimeUnit
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -34,11 +36,25 @@ class MainActivity : ComponentActivity() {
             "music_db"
         ).build()
 
-        // Usamos la API de Piped que es más estable para búsquedas
+        // Cliente OkHttp optimizado
+        val okHttpClient = OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                val request = chain.request().newBuilder()
+                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                    .build()
+                chain.proceed(request)
+            }
+            .connectTimeout(20, TimeUnit.SECONDS)
+            .readTimeout(20, TimeUnit.SECONDS)
+            .build()
+
+        // Servidor de Piped de alto rendimiento (Garuda Linux)
         val retrofit = Retrofit.Builder()
-            .baseUrl("https://pipedapi.kavin.rocks/")
+            .baseUrl("https://piped-api.garudalinux.org/") 
+            .client(okHttpClient)
             .addConverterFactory(GsonConverterFactory.create())
             .build()
+            
         val youtubeService = retrofit.create(YouTubeService::class.java)
         val repository = MusicRepository(database.musicDao(), youtubeService, applicationContext)
 
@@ -98,7 +114,7 @@ fun MainApp(viewModel: MainViewModel, controller: androidx.media3.session.MediaC
                     controller?.let {
                         val mediaItem = androidx.media3.common.MediaItem.Builder()
                             .setMediaId(song.id)
-                            .setUri(song.audioUrl ?: "https://www.youtube.com/watch?v=${song.id}")
+                            .setUri("https://piped-api.garudalinux.org/streams/${song.id}")
                             .setMediaMetadata(
                                 androidx.media3.common.MediaMetadata.Builder()
                                     .setTitle(song.title)
@@ -111,7 +127,7 @@ fun MainApp(viewModel: MainViewModel, controller: androidx.media3.session.MediaC
                         it.play()
                     }
                 })
-                1 -> PlaylistsScreen(viewModel, onPlaylistClick = { /* Ver canciones de la lista */ })
+                1 -> PlaylistsScreen(viewModel, onPlaylistClick = { /* Ver canciones */ })
             }
         }
     }

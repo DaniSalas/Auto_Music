@@ -21,8 +21,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import okhttp3.OkHttpClient
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
+import java.util.concurrent.TimeUnit
 
 class MusicService : MediaLibraryService() {
 
@@ -36,10 +38,26 @@ class MusicService : MediaLibraryService() {
         super.onCreate()
         
         val database = androidx.room.Room.databaseBuilder(applicationContext, MusicDatabase::class.java, "music_db").build()
+        
+        val okHttpClient = OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                val request = chain.request().newBuilder()
+                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                    .header("Origin", "https://music.youtube.com")
+                    .header("Referer", "https://music.youtube.com/")
+                    .build()
+                chain.proceed(request)
+            }
+            .connectTimeout(20, TimeUnit.SECONDS)
+            .readTimeout(20, TimeUnit.SECONDS)
+            .build()
+
         val retrofit = Retrofit.Builder()
-            .baseUrl("https://www.googleapis.com/youtube/v3/")
+            .baseUrl("https://music.youtube.com/")
+            .client(okHttpClient)
             .addConverterFactory(GsonConverterFactory.create())
             .build()
+            
         val youtubeService = retrofit.create(YouTubeService::class.java)
         repository = MusicRepository(database.musicDao(), youtubeService, applicationContext)
 
@@ -106,7 +124,7 @@ class MusicService : MediaLibraryService() {
                     val items = songs.map { song ->
                         MediaItem.Builder()
                             .setMediaId(song.id)
-                            .setUri(song.audioUrl)
+                            .setUri(song.audioUrl ?: "https://inv.tux.pizza/latest_version?id=${song.id}&itag=140")
                             .setMediaMetadata(
                                 MediaMetadata.Builder()
                                     .setTitle(song.title)

@@ -48,4 +48,8 @@ class MainViewModel(private val repository: MusicRepository) : ViewModel() {
             repository.addSongToPlaylist(song, playlist.id)
         }
     }
+
+    fun getSongsInPlaylist(playlistId: Long): kotlinx.coroutines.flow.Flow<List<Song>> {
+        return repository.getSongsInPlaylist(playlistId)
+    }
 }

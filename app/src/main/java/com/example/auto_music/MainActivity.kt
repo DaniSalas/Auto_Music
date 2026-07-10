@@ -36,11 +36,13 @@ class MainActivity : ComponentActivity() {
             "music_db"
         ).build()
 
-        // Cliente OkHttp optimizado
+        // Cliente OkHttp configurado para imitar al cliente web de YouTube Music (como RiMusic)
         val okHttpClient = OkHttpClient.Builder()
             .addInterceptor { chain ->
                 val request = chain.request().newBuilder()
                     .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                    .header("Origin", "https://music.youtube.com")
+                    .header("Referer", "https://music.youtube.com/")
                     .build()
                 chain.proceed(request)
             }
@@ -48,9 +50,9 @@ class MainActivity : ComponentActivity() {
             .readTimeout(20, TimeUnit.SECONDS)
             .build()
 
-        // Servidor de Piped de alto rendimiento (Garuda Linux)
+        // Usamos directamente el endpoint interno de YouTube Music (InnerTube)
         val retrofit = Retrofit.Builder()
-            .baseUrl("https://piped-api.garudalinux.org/") 
+            .baseUrl("https://music.youtube.com/") 
             .client(okHttpClient)
             .addConverterFactory(GsonConverterFactory.create())
             .build()
@@ -114,7 +116,8 @@ fun MainApp(viewModel: MainViewModel, controller: androidx.media3.session.MediaC
                     controller?.let {
                         val mediaItem = androidx.media3.common.MediaItem.Builder()
                             .setMediaId(song.id)
-                            .setUri("https://piped-api.garudalinux.org/streams/${song.id}")
+                            // Para streaming directo usamos un servidor de Invidious que extraiga el audio
+                            .setUri("https://inv.tux.pizza/latest_version?id=${song.id}&itag=140")
                             .setMediaMetadata(
                                 androidx.media3.common.MediaMetadata.Builder()
                                     .setTitle(song.title)

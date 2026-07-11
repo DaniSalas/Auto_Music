@@ -9,9 +9,15 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
 import com.example.auto_music.model.Playlist
 import com.example.auto_music.model.Song
 import com.example.auto_music.ui.MainViewModel
@@ -24,6 +30,7 @@ fun SearchScreen(viewModel: MainViewModel, onPlay: (Song) -> Unit) {
     val playlists by viewModel.playlists.collectAsState()
     var selectedSong by remember { mutableStateOf<Song?>(null) }
     var showPlaylistDialog by remember { mutableStateOf(false) }
+    val keyboardController = LocalSoftwareKeyboardController.current
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         OutlinedTextField(
@@ -32,10 +39,19 @@ fun SearchScreen(viewModel: MainViewModel, onPlay: (Song) -> Unit) {
             modifier = Modifier.fillMaxWidth(),
             label = { Text("Search by title, artist, or lyrics") },
             trailingIcon = {
-                IconButton(onClick = { viewModel.search(query) }) {
+                IconButton(onClick = { 
+                    viewModel.search(query)
+                    keyboardController?.hide()
+                }) {
                     Icon(Icons.Default.Search, contentDescription = "Search")
                 }
-            }
+            },
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(onSearch = {
+                viewModel.search(query)
+                keyboardController?.hide()
+            }),
+            singleLine = true
         )
         
         Spacer(modifier = Modifier.height(16.dp))
@@ -43,6 +59,10 @@ fun SearchScreen(viewModel: MainViewModel, onPlay: (Song) -> Unit) {
         if (isLoading) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
+            }
+        } else if (searchResults.isEmpty() && query.isNotEmpty()) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("No results found for \"$query\"", style = MaterialTheme.typography.bodyLarge)
             }
         } else {
             LazyColumn {
@@ -95,6 +115,12 @@ fun SongItem(song: Song, onPlay: () -> Unit, onAddToPlaylist: () -> Unit) {
             modifier = Modifier.padding(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            AsyncImage(
+                model = song.thumbnailUrl,
+                contentDescription = null,
+                modifier = Modifier.size(56.dp).padding(end = 8.dp),
+                contentScale = ContentScale.Crop
+            )
             Column(modifier = Modifier.weight(1f)) {
                 Text(song.title, style = MaterialTheme.typography.titleMedium)
                 Text(song.artist, style = MaterialTheme.typography.bodyMedium)

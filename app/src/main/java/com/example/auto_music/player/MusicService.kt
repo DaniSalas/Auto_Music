@@ -37,23 +37,15 @@ class MusicService : MediaLibraryService() {
     override fun onCreate() {
         super.onCreate()
         
-        val database = androidx.room.Room.databaseBuilder(applicationContext, MusicDatabase::class.java, "music_db").build()
+        val database = MusicDatabase.getDatabase(applicationContext)
         
         val okHttpClient = OkHttpClient.Builder()
-            .addInterceptor { chain ->
-                val request = chain.request().newBuilder()
-                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-                    .header("Origin", "https://music.youtube.com")
-                    .header("Referer", "https://music.youtube.com/")
-                    .build()
-                chain.proceed(request)
-            }
-            .connectTimeout(20, TimeUnit.SECONDS)
-            .readTimeout(20, TimeUnit.SECONDS)
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
             .build()
 
         val retrofit = Retrofit.Builder()
-            .baseUrl("https://music.youtube.com/")
+            .baseUrl("https://www.youtube.com/")
             .client(okHttpClient)
             .addConverterFactory(GsonConverterFactory.create())
             .build()

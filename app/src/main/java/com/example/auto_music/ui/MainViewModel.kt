@@ -15,7 +15,7 @@ class MainViewModel(private val repository: MusicRepository) : ViewModel() {
     private val _searchResults = MutableStateFlow<List<Song>>(emptyList())
     val searchResults: StateFlow<List<Song>> = _searchResults.asStateFlow()
 
-    private val _isLoading = MutableStateFlow(false)
+    private val _isLoading = MutableStateFlow(value = false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
     private val _playlists = MutableStateFlow<List<Playlist>>(emptyList())
@@ -30,9 +30,11 @@ class MainViewModel(private val repository: MusicRepository) : ViewModel() {
     }
 
     fun search(query: String) {
+        if (query.isBlank()) return
         viewModelScope.launch {
             _isLoading.value = true
-            _searchResults.value = repository.searchSongs(query)
+            val results = repository.searchSongs(query)
+            _searchResults.value = results
             _isLoading.value = false
         }
     }

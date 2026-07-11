@@ -56,11 +56,16 @@ fun PlaylistsScreen(viewModel: MainViewModel, onPlaylistClick: (Playlist) -> Uni
                 )
             },
             confirmButton = {
-                TextButton(onClick = {
-                    viewModel.createPlaylist(newPlaylistName)
-                    newPlaylistName = ""
-                    showCreateDialog = false
-                }) {
+                TextButton(
+                    onClick = {
+                        if (newPlaylistName.isNotBlank()) {
+                            viewModel.createPlaylist(newPlaylistName)
+                            newPlaylistName = ""
+                            showCreateDialog = false
+                        }
+                    },
+                    enabled = newPlaylistName.isNotBlank()
+                ) {
                     Text("Create")
                 }
             },

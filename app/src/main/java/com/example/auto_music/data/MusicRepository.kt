@@ -5,8 +5,9 @@ import android.content.Context
 import android.net.Uri
 import android.os.Environment
 import android.util.Log
+import androidx.core.net.toUri
 import com.example.auto_music.data.local.MusicDao
-import com.example.auto_music.data.remote.InnerTubeRequest
+import com.example.auto_music.data.remote.Innertube
 import com.example.auto_music.data.remote.YouTubeService
 import com.example.auto_music.model.Playlist
 import com.example.auto_music.model.PlaylistSongCrossRef
@@ -17,42 +18,54 @@ import java.io.File
 
 class MusicRepository(
     private val musicDao: MusicDao,
-    private val youtubeService: YouTubeService,
-    private val context: Context
+    private val youtubeService: YouTubeService, // Keeping for backward compatibility if needed, but using Innertube for search
+    private val context: Context,
 ) {
     val allPlaylists: Flow<List<Playlist>> = musicDao.getAllPlaylists()
     val allSongs: Flow<List<Song>> = musicDao.getAllSongs()
 
     suspend fun searchSongs(query: String): List<Song> {
         return try {
-            Log.d("MusicRepository", "Searching YouTube Music for: $query")
-            val response = youtubeService.searchVideos(InnerTubeRequest(query = query))
+            Log.d("MusicRepository", "Searching YouTube Music (Innertube Ktor) for: $query")
+            val response = Innertube.search(query)
             
             val songs = mutableListOf<Song>()
             
-            // Navegamos por el laberinto de JSON de YouTube Music
-            response.contents?.tabbedSearchResultsRenderer?.tabs?.firstOrNull()
-                ?.content?.sectionListRenderer?.contents?.forEach { section ->
-                    section.musicShelfRenderer?.contents?.forEach { item ->
-                        val renderer = item.musicResponsiveListItemRenderer ?: return@forEach
-                        
-                        val videoId = renderer.navigationEndpoint?.watchEndpoint?.videoId ?: return@forEach
-                        val title = renderer.flexColumns?.getOrNull(0)?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.firstOrNull()?.text ?: "Unknown"
-                        val artist = renderer.flexColumns?.getOrNull(1)?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.firstOrNull()?.text ?: "Unknown"
-                        val thumb = renderer.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails?.lastOrNull()?.url ?: ""
-                        
-                        songs.add(
-                            Song(
-                                id = videoId,
-                                title = title,
-                                artist = artist,
-                                thumbnailUrl = thumb,
-                                audioUrl = null,
-                                duration = 0
-                            )
-                        )
-                    }
-                }
+            val musicShelf = response?.contents
+                ?.tabbedSearchResultsRenderer
+                ?.tabs
+                ?.firstOrNull()
+                ?.tabRenderer
+                ?.content
+                ?.sectionListRenderer
+                ?.contents
+                ?.lastOrNull()
+                ?.musicShelfRenderer
+
+            musicShelf?.contents?.forEach { item ->
+                val renderer = item.musicResponsiveListItemRenderer ?: return@forEach
+                val videoId = renderer.navigationEndpoint?.watchEndpoint?.videoId ?: return@forEach
+                
+                val title = renderer.flexColumns?.getOrNull(0)
+                    ?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.firstOrNull()?.text ?: "Unknown"
+                
+                val artist = renderer.flexColumns?.getOrNull(1)
+                    ?.musicResponsiveListItemFlexColumnRenderer?.text?.runs
+                    ?.joinToString("") { it.text ?: "" } ?: "Unknown Artist"
+                
+                val thumb = renderer.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails?.lastOrNull()?.url ?: ""
+                
+                songs.add(
+                    Song(
+                        id = videoId,
+                        title = title,
+                        artist = artist,
+                        thumbnailUrl = thumb,
+                        audioUrl = null,
+                        duration = 0
+                    )
+                )
+            }
             
             Log.d("MusicRepository", "Found ${songs.size} results on YouTube Music")
             songs
@@ -76,7 +89,6 @@ class MusicRepository(
     }
 
     suspend fun updateSongDownloadStatus(songId: String, localPath: String) {
-        // Buscamos la canción actual para no perder otros datos
         val allSongsInDb = allSongs.first()
         val song = allSongsInDb.find { it.id == songId }
         song?.let {
@@ -91,10 +103,6 @@ class MusicRepository(
     private fun downloadSong(song: Song) {
         try {
             val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-            
-            // Usamos un proveedor de streams fiable (Cobalt o similar, o un proxy de Invidious)
-            // Para que sea 100% gratuito y sin keys, usamos el truco de 'latest_version' de Invidious 
-            // que suele ser el más directo.
             val audioStreamUrl = "https://inv.tux.pizza/latest_version?id=${song.id}&itag=140"
             
             val directory = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Auto_Music")
@@ -105,7 +113,7 @@ class MusicRepository(
             val fileName = "${song.title.replace(Regex("[\\\\/:*?\"<>|]"), "_")}.mp3"
             val file = File(directory, fileName)
 
-            val request = DownloadManager.Request(Uri.parse(audioStreamUrl))
+            val request = DownloadManager.Request(audioStreamUrl.toUri())
                 .setTitle("Downloading ${song.title}")
                 .setDescription("Auto Music Download")
                 .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)

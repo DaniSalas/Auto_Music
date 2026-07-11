@@ -17,6 +17,8 @@ import com.example.auto_music.data.MusicRepository
 import com.example.auto_music.data.local.MusicDatabase
 import com.example.auto_music.data.remote.YouTubeService
 import com.example.auto_music.ui.MainViewModel
+import com.example.auto_music.model.Playlist
+import com.example.auto_music.ui.screens.PlaylistSongsScreen
 import com.example.auto_music.ui.screens.PlaylistsScreen
 import com.example.auto_music.ui.screens.SearchScreen
 import com.example.auto_music.ui.theme.Auto_MusicTheme
@@ -30,29 +32,15 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         
-        val database = androidx.room.Room.databaseBuilder(
-            applicationContext,
-            MusicDatabase::class.java,
-            "music_db"
-        ).build()
+        val database = MusicDatabase.getDatabase(applicationContext)
 
-        // Cliente OkHttp configurado para imitar al cliente web de YouTube Music (como RiMusic)
         val okHttpClient = OkHttpClient.Builder()
-            .addInterceptor { chain ->
-                val request = chain.request().newBuilder()
-                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-                    .header("Origin", "https://music.youtube.com")
-                    .header("Referer", "https://music.youtube.com/")
-                    .build()
-                chain.proceed(request)
-            }
-            .connectTimeout(20, TimeUnit.SECONDS)
-            .readTimeout(20, TimeUnit.SECONDS)
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
             .build()
 
-        // Usamos directamente el endpoint interno de YouTube Music (InnerTube)
         val retrofit = Retrofit.Builder()
-            .baseUrl("https://music.youtube.com/") 
+            .baseUrl("https://www.youtube.com/")
             .client(okHttpClient)
             .addConverterFactory(GsonConverterFactory.create())
             .build()
@@ -91,46 +79,75 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MainApp(viewModel: MainViewModel, controller: androidx.media3.session.MediaController?) {
     var currentScreen by remember { mutableIntStateOf(0) }
+    var selectedPlaylist by remember { mutableStateOf<Playlist?>(null) }
 
     Scaffold(
         bottomBar = {
-            NavigationBar {
-                NavigationBarItem(
-                    selected = currentScreen == 0,
-                    onClick = { currentScreen = 0 },
-                    icon = { Icon(Icons.Default.Search, contentDescription = "Search") },
-                    label = { Text("Search") }
-                )
-                NavigationBarItem(
-                    selected = currentScreen == 1,
-                    onClick = { currentScreen = 1 },
-                    icon = { Icon(Icons.AutoMirrored.Filled.List, contentDescription = "Playlists") },
-                    label = { Text("Playlists") }
-                )
+            if (selectedPlaylist == null) {
+                NavigationBar {
+                    NavigationBarItem(
+                        selected = currentScreen == 0,
+                        onClick = { currentScreen = 0 },
+                        icon = { Icon(Icons.Default.Search, contentDescription = "Search") },
+                        label = { Text("Search") }
+                    )
+                    NavigationBarItem(
+                        selected = currentScreen == 1,
+                        onClick = { currentScreen = 1 },
+                        icon = { Icon(Icons.AutoMirrored.Filled.List, contentDescription = "Playlists") },
+                        label = { Text("Playlists") }
+                    )
+                }
             }
         }
     ) { innerPadding ->
         Surface(modifier = Modifier.padding(innerPadding)) {
-            when (currentScreen) {
-                0 -> SearchScreen(viewModel, onPlay = { song ->
-                    controller?.let {
-                        val mediaItem = androidx.media3.common.MediaItem.Builder()
-                            .setMediaId(song.id)
-                            // Para streaming directo usamos un servidor de Invidious que extraiga el audio
-                            .setUri("https://inv.tux.pizza/latest_version?id=${song.id}&itag=140")
-                            .setMediaMetadata(
-                                androidx.media3.common.MediaMetadata.Builder()
-                                    .setTitle(song.title)
-                                    .setArtist(song.artist)
-                                    .build()
-                            )
-                            .build()
-                        it.setMediaItem(mediaItem)
-                        it.prepare()
-                        it.play()
+            if (selectedPlaylist != null) {
+                PlaylistSongsScreen(
+                    viewModel = viewModel,
+                    playlist = selectedPlaylist!!,
+                    onBack = { selectedPlaylist = null },
+                    onPlay = { song ->
+                        controller?.let {
+                            val mediaItem = androidx.media3.common.MediaItem.Builder()
+                                .setMediaId(song.id)
+                                .setUri("https://inv.tux.pizza/latest_version?id=${song.id}&itag=140")
+                                .setMediaMetadata(
+                                    androidx.media3.common.MediaMetadata.Builder()
+                                        .setTitle(song.title)
+                                        .setArtist(song.artist)
+                                        .build()
+                                )
+                                .build()
+                            it.setMediaItem(mediaItem)
+                            it.prepare()
+                            it.play()
+                        }
                     }
-                })
-                1 -> PlaylistsScreen(viewModel, onPlaylistClick = { /* Ver canciones */ })
+                )
+            } else {
+                when (currentScreen) {
+                    0 -> SearchScreen(viewModel, onPlay = { song ->
+                        controller?.let {
+                            val mediaItem = androidx.media3.common.MediaItem.Builder()
+                                .setMediaId(song.id)
+                                .setUri("https://inv.tux.pizza/latest_version?id=${song.id}&itag=140")
+                                .setMediaMetadata(
+                                    androidx.media3.common.MediaMetadata.Builder()
+                                        .setTitle(song.title)
+                                        .setArtist(song.artist)
+                                        .build()
+                                )
+                                .build()
+                            it.setMediaItem(mediaItem)
+                            it.prepare()
+                            it.play()
+                        }
+                    })
+                    1 -> PlaylistsScreen(viewModel, onPlaylistClick = { playlist ->
+                        selectedPlaylist = playlist
+                    })
+                }
             }
         }
     }

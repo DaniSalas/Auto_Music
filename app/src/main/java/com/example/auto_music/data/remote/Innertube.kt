@@ -47,6 +47,7 @@ object Innertube {
                 client = InnerTubeClient(
                     clientName = InnertubeConstants.CLIENT_NAME,
                     clientVersion = InnertubeConstants.CLIENT_VERSION,
+                    platform = "DESKTOP",
                     hl = "en",
                     gl = "US",
                     visitorData = InnertubeConstants.CHROME_WINDOWS_VISITOR_DATA,
@@ -54,7 +55,7 @@ object Innertube {
                     referer = "${InnertubeConstants.YOUTUBE_MUSIC_URL}/"
                 )
             )
-            val body = SearchBody(context = context, query = query)
+            val body = SearchBody(query = query, context = context)
             
             val response = client.post("${InnertubeConstants.YOUTUBE_MUSIC_URL}/youtubei/v1/search") {
                 contentType(ContentType.Application.Json)
@@ -63,6 +64,7 @@ object Innertube {
                 header("X-Goog-Api-Key", InnertubeConstants.API_KEY)
                 header("X-Goog-FieldMask", InnertubeConstants.SEARCH_MASK)
                 header("X-Origin", InnertubeConstants.YOUTUBE_MUSIC_URL)
+                header("X-Youtube-Bootstrap-Logged-In", "false")
                 header(HttpHeaders.Referrer, "${InnertubeConstants.YOUTUBE_MUSIC_URL}/")
                 userAgent(InnertubeConstants.CHROME_WINDOWS_USER_AGENT)
                 parameter("prettyPrint", "false")

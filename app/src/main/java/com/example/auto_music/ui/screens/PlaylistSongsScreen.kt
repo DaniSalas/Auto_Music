@@ -33,7 +33,7 @@ fun PlaylistSongsScreen(
                 title = { Text(playlist.name) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Enrere")
                     }
                 }
             )
@@ -56,11 +56,11 @@ fun PlaylistSongsScreen(
                             Text(song.title, style = MaterialTheme.typography.titleMedium)
                             Text(song.artist, style = MaterialTheme.typography.bodyMedium)
                             if (song.isDownloaded) {
-                                Text("✓ Downloaded", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                                Text("✓ Descarregada", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                             }
                         }
                         IconButton(onClick = { onPlay(song) }) {
-                            Icon(Icons.Default.PlayArrow, contentDescription = "Play")
+                            Icon(Icons.Default.PlayArrow, contentDescription = "Reprodueix")
                         }
                     }
                 }

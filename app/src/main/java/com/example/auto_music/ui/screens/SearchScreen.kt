@@ -25,6 +25,7 @@ import com.example.auto_music.ui.MainViewModel
 @Composable
 fun SearchScreen(viewModel: MainViewModel, onPlay: (Song) -> Unit) {
     var query by remember { mutableStateOf("") }
+    var hasSearched by remember { mutableStateOf(false) }
     val searchResults by viewModel.searchResults.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val playlists by viewModel.playlists.collectAsState()
@@ -35,21 +36,30 @@ fun SearchScreen(viewModel: MainViewModel, onPlay: (Song) -> Unit) {
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         OutlinedTextField(
             value = query,
-            onValueChange = { query = it },
+            onValueChange = { 
+                query = it
+                hasSearched = false // Reset state when typing
+            },
             modifier = Modifier.fillMaxWidth(),
-            label = { Text("Search by title, artist, or lyrics") },
+            label = { Text("Busca per títol, artista o lletra") },
             trailingIcon = {
                 IconButton(onClick = { 
-                    viewModel.search(query)
-                    keyboardController?.hide()
+                    if (query.isNotBlank()) {
+                        viewModel.search(query)
+                        hasSearched = true
+                        keyboardController?.hide()
+                    }
                 }) {
-                    Icon(Icons.Default.Search, contentDescription = "Search")
+                    Icon(Icons.Default.Search, contentDescription = "Cerca")
                 }
             },
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(onSearch = {
-                viewModel.search(query)
-                keyboardController?.hide()
+                if (query.isNotBlank()) {
+                    viewModel.search(query)
+                    hasSearched = true
+                    keyboardController?.hide()
+                }
             }),
             singleLine = true
         )
@@ -60,9 +70,9 @@ fun SearchScreen(viewModel: MainViewModel, onPlay: (Song) -> Unit) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
             }
-        } else if (searchResults.isEmpty() && query.isNotEmpty()) {
+        } else if (hasSearched && searchResults.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("No results found for \"$query\"", style = MaterialTheme.typography.bodyLarge)
+                Text("No s'han trobat resultats per a \"$query\"", style = MaterialTheme.typography.bodyLarge)
             }
         } else {
             LazyColumn {
@@ -83,7 +93,7 @@ fun SearchScreen(viewModel: MainViewModel, onPlay: (Song) -> Unit) {
     if (showPlaylistDialog) {
         AlertDialog(
             onDismissRequest = { showPlaylistDialog = false },
-            title = { Text("Add to Playlist") },
+            title = { Text("Afegir a la llista de reproducció") },
             text = {
                 Column {
                     playlists.forEach { playlist ->
@@ -101,7 +111,7 @@ fun SearchScreen(viewModel: MainViewModel, onPlay: (Song) -> Unit) {
             },
             confirmButton = {
                 TextButton(onClick = { showPlaylistDialog = false }) {
-                    Text("Cancel")
+                    Text("Cancel·la")
                 }
             }
         )
@@ -126,10 +136,10 @@ fun SongItem(song: Song, onPlay: () -> Unit, onAddToPlaylist: () -> Unit) {
                 Text(song.artist, style = MaterialTheme.typography.bodyMedium)
             }
             IconButton(onClick = onPlay) {
-                Icon(Icons.Default.PlayArrow, contentDescription = "Play Preview")
+                Icon(Icons.Default.PlayArrow, contentDescription = "Reprodueix")
             }
             IconButton(onClick = onAddToPlaylist) {
-                Icon(Icons.Default.Add, contentDescription = "Add to Playlist")
+                Icon(Icons.Default.Add, contentDescription = "Afegeix a la llista")
             }
         }
     }

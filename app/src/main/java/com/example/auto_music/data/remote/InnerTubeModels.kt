@@ -6,9 +6,10 @@ import kotlinx.serialization.json.JsonNames
 
 @Serializable
 data class SearchBody(
-    val context: InnerTubeContext,
-    val query: String,
-    val params: String? = "EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D"
+    val query: String?,
+    val params: String? = "EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D",
+    val continuation: String? = null,
+    val context: InnerTubeContext
 )
 
 @Serializable
@@ -21,6 +22,7 @@ data class InnerTubeContext(
 data class InnerTubeClient(
     val clientName: String,
     val clientVersion: String,
+    val platform: String? = "DESKTOP",
     val hl: String = "en",
     val gl: String = "US",
     val visitorData: String? = null,
@@ -35,7 +37,13 @@ data class User(
 
 @Serializable
 data class InnerTubeResponse(
-    val contents: Contents? = null
+    val contents: Contents? = null,
+    val responseContext: ResponseContext? = null
+)
+
+@Serializable
+data class ResponseContext(
+    val visitorData: String? = null
 )
 
 @Serializable
@@ -55,7 +63,8 @@ data class Tab(
 
 @Serializable
 data class TabRenderer(
-    val content: SectionList? = null
+    val content: SectionList? = null,
+    val title: String? = null
 )
 
 @Serializable
@@ -77,7 +86,8 @@ data class SectionContent(
 
 @Serializable
 data class MusicShelfRenderer(
-    val contents: List<MusicItem>? = null
+    val contents: List<MusicItem>? = null,
+    val title: Runs? = null
 )
 
 @Serializable
@@ -111,11 +121,11 @@ data class FlexColumn(
 
 @Serializable
 data class FlexColumnRenderer(
-    val text: TextContent? = null
+    val text: Runs? = null
 )
 
 @Serializable
-data class TextContent(
+data class Runs(
     val runs: List<Run>? = null
 )
 

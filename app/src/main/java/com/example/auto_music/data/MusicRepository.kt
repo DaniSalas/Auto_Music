@@ -18,7 +18,7 @@ import java.io.File
 
 class MusicRepository(
     private val musicDao: MusicDao,
-    private val youtubeService: YouTubeService, // Keeping for backward compatibility if needed, but using Innertube for search
+    private val youtubeService: YouTubeService,
     private val context: Context,
 ) {
     val allPlaylists: Flow<List<Playlist>> = musicDao.getAllPlaylists()
@@ -26,11 +26,12 @@ class MusicRepository(
 
     suspend fun searchSongs(query: String): List<Song> {
         return try {
-            Log.d("MusicRepository", "Searching YouTube Music (Innertube Ktor) for: $query")
+            Log.d("MusicRepository", "Cercant a YouTube Music (Innertube Ktor) per: $query")
             val response = Innertube.search(query)
             
             val songs = mutableListOf<Song>()
             
+            // Lògica de parsing de kreate_imp
             val musicShelf = response?.contents
                 ?.tabbedSearchResultsRenderer
                 ?.tabs
@@ -45,12 +46,15 @@ class MusicRepository(
                 val renderer = item.musicResponsiveListItemRenderer ?: return@forEach
                 val videoId = renderer.navigationEndpoint?.watchEndpoint?.videoId ?: return@forEach
                 
+                // Extreure el títol (columna 0)
                 val title = renderer.flexColumns?.getOrNull(0)
-                    ?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.firstOrNull()?.text ?: "Unknown"
+                    ?.musicResponsiveListItemFlexColumnRenderer?.text?.runs
+                    ?.joinToString("") { it.text ?: "" } ?: "Desconegut"
                 
+                // Extreure l'artista (columna 1)
                 val artist = renderer.flexColumns?.getOrNull(1)
                     ?.musicResponsiveListItemFlexColumnRenderer?.text?.runs
-                    ?.joinToString("") { it.text ?: "" } ?: "Unknown Artist"
+                    ?.joinToString("") { it.text ?: "" } ?: "Artista desconegut"
                 
                 val thumb = renderer.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails?.lastOrNull()?.url ?: ""
                 
@@ -66,10 +70,10 @@ class MusicRepository(
                 )
             }
             
-            Log.d("MusicRepository", "Found ${songs.size} results on YouTube Music")
+            Log.d("MusicRepository", "S'han trobat ${songs.size} resultats")
             songs
         } catch (e: Exception) {
-            Log.e("MusicRepository", "YouTube Music search failed", e)
+            Log.e("MusicRepository", "Error en la cerca de YouTube Music", e)
             emptyList()
         }
     }
@@ -113,8 +117,8 @@ class MusicRepository(
             val file = File(directory, fileName)
 
             val request = DownloadManager.Request(audioStreamUrl.toUri())
-                .setTitle("Downloading ${song.title}")
-                .setDescription("Auto Music Download")
+                .setTitle("Descarregant ${song.title}")
+                .setDescription("Descarregant música d'Auto Music")
                 .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                 .setDestinationUri(Uri.fromFile(file))
                 .setAllowedOverMetered(true)
@@ -122,9 +126,9 @@ class MusicRepository(
 
             downloadManager.enqueue(request)
 
-            Log.d("MusicRepository", "Download queued for ${song.title} to: ${file.absolutePath}")
+            Log.d("MusicRepository", "Descàrrega en cua per a ${song.title} a: ${file.absolutePath}")
         } catch (e: Exception) {
-            Log.e("MusicRepository", "Download failed for ${song.title}", e)
+            Log.e("MusicRepository", "Error en la descàrrega de ${song.title}", e)
         }
     }
 }

@@ -88,14 +88,14 @@ fun MainApp(viewModel: MainViewModel, controller: androidx.media3.session.MediaC
                     NavigationBarItem(
                         selected = currentScreen == 0,
                         onClick = { currentScreen = 0 },
-                        icon = { Icon(Icons.Default.Search, contentDescription = "Search") },
-                        label = { Text("Search") }
+                        icon = { Icon(Icons.Default.Search, contentDescription = "Cerca") },
+                        label = { Text("Cerca") }
                     )
                     NavigationBarItem(
                         selected = currentScreen == 1,
                         onClick = { currentScreen = 1 },
-                        icon = { Icon(Icons.AutoMirrored.Filled.List, contentDescription = "Playlists") },
-                        label = { Text("Playlists") }
+                        icon = { Icon(Icons.AutoMirrored.Filled.List, contentDescription = "Llistes") },
+                        label = { Text("Llistes") }
                     )
                 }
             }

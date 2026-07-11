@@ -22,7 +22,7 @@ fun PlaylistsScreen(viewModel: MainViewModel, onPlaylistClick: (Playlist) -> Uni
     Scaffold(
         floatingActionButton = {
             FloatingActionButton(onClick = { showCreateDialog = true }) {
-                Icon(Icons.Default.Add, contentDescription = "Create Playlist")
+                Icon(Icons.Default.Add, contentDescription = "Crea llista de reproducció")
             }
         }
     ) { padding ->
@@ -47,12 +47,12 @@ fun PlaylistsScreen(viewModel: MainViewModel, onPlaylistClick: (Playlist) -> Uni
     if (showCreateDialog) {
         AlertDialog(
             onDismissRequest = { showCreateDialog = false },
-            title = { Text("New Playlist") },
+            title = { Text("Nova llista de reproducció") },
             text = {
                 TextField(
                     value = newPlaylistName,
                     onValueChange = { newPlaylistName = it },
-                    label = { Text("Name") }
+                    label = { Text("Nom") }
                 )
             },
             confirmButton = {
@@ -66,12 +66,12 @@ fun PlaylistsScreen(viewModel: MainViewModel, onPlaylistClick: (Playlist) -> Uni
                     },
                     enabled = newPlaylistName.isNotBlank()
                 ) {
-                    Text("Create")
+                    Text("Crea")
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showCreateDialog = false }) {
-                    Text("Cancel")
+                    Text("Cancel·la")
                 }
             }
         )

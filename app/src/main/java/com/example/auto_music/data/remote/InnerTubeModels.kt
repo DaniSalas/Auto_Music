@@ -6,22 +6,31 @@ import kotlinx.serialization.json.JsonNames
 
 @Serializable
 data class SearchBody(
-    val context: InnerTubeContext = InnerTubeContext(),
+    val context: InnerTubeContext,
     val query: String,
-    val params: String = "EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D"
+    val params: String? = "EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D"
 )
 
 @Serializable
 data class InnerTubeContext(
-    val client: InnerTubeClient = InnerTubeClient()
+    val client: InnerTubeClient,
+    val user: User = User()
 )
 
 @Serializable
 data class InnerTubeClient(
-    val clientName: String = "WEB_REMIX",
-    val clientVersion: String = "1.20250416.01.00",
+    val clientName: String,
+    val clientVersion: String,
     val hl: String = "en",
-    val gl: String = "US"
+    val gl: String = "US",
+    val visitorData: String? = null,
+    val userAgent: String? = null,
+    val referer: String? = null
+)
+
+@Serializable
+data class User(
+    val lockedSafetyMode: Boolean = false
 )
 
 @Serializable

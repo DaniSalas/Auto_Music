@@ -39,8 +39,7 @@ class MusicRepository(
                 ?.content
                 ?.sectionListRenderer
                 ?.contents
-                ?.lastOrNull()
-                ?.musicShelfRenderer
+                ?.firstNotNullOfOrNull { it.musicShelfRenderer }
 
             musicShelf?.contents?.forEach { item ->
                 val renderer = item.musicResponsiveListItemRenderer ?: return@forEach

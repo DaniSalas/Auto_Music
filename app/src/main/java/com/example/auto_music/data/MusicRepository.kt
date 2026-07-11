@@ -26,54 +26,88 @@ class MusicRepository(
 
     suspend fun searchSongs(query: String): List<Song> {
         return try {
-            Log.d("MusicRepository", "Cercant a YouTube Music (Innertube Ktor) per: $query")
+            Log.i("MusicRepository", "Cercant a YouTube Music (Innertube Ktor) per: $query")
             val response = Innertube.search(query)
             
+            if (response == null) {
+                Log.e("MusicRepository", "Resposta nul·la d'Innertube")
+                return emptyList()
+            }
+
             val songs = mutableListOf<Song>()
             
-            // Lògica de parsing de kreate_imp
-            val musicShelf = response?.contents
-                ?.tabbedSearchResultsRenderer
-                ?.tabs
-                ?.firstOrNull()
-                ?.tabRenderer
-                ?.content
-                ?.sectionListRenderer
-                ?.contents
-                ?.firstNotNullOfOrNull { it.musicShelfRenderer }
+            // Intentar obtenir la llista de seccions des de tabs o directament
+            val contents = response.contents?.tabbedSearchResultsRenderer?.tabs?.firstOrNull()?.tabRenderer?.content?.sectionListRenderer?.contents
+                ?: response.contents?.sectionListRenderer?.contents
+            
+            Log.i("MusicRepository", "Seccions trobades: ${contents?.size ?: 0}")
 
-            musicShelf?.contents?.forEach { item ->
-                val renderer = item.musicResponsiveListItemRenderer ?: return@forEach
-                val videoId = renderer.navigationEndpoint?.watchEndpoint?.videoId ?: return@forEach
+            if (contents == null) {
+                Log.w("MusicRepository", "No s'han trobat continguts a la resposta")
+                return emptyList()
+            }
+
+            // Cercar el musicShelfRenderer a qualsevol de les seccions
+            contents.forEachIndexed { index, section ->
+                val musicShelf = section.musicShelfRenderer 
+                    ?: section.musicPlaylistShelfRenderer
+                    ?: section.musicCarouselShelfRenderer
                 
-                // Extreure el títol (columna 0)
-                val title = renderer.flexColumns?.getOrNull(0)
-                    ?.musicResponsiveListItemFlexColumnRenderer?.text?.runs
-                    ?.joinToString("") { it.text ?: "" } ?: "Desconegut"
-                
-                // Extreure l'artista (columna 1)
-                val artist = renderer.flexColumns?.getOrNull(1)
-                    ?.musicResponsiveListItemFlexColumnRenderer?.text?.runs
-                    ?.joinToString("") { it.text ?: "" } ?: "Artista desconegut"
-                
-                val thumb = renderer.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails?.lastOrNull()?.url ?: ""
-                
-                songs.add(
-                    Song(
-                        id = videoId,
-                        title = title,
-                        artist = artist,
-                        thumbnailUrl = thumb,
-                        audioUrl = null,
-                        duration = 0
+                if (musicShelf != null) {
+                    Log.i("MusicRepository", "Processant musicShelf a secció $index amb ${musicShelf.contents?.size ?: 0} ítems")
+                }
+
+                musicShelf?.contents?.forEach { item ->
+                    val renderer = item.musicResponsiveListItemRenderer
+                    if (renderer == null) {
+                        Log.v("MusicRepository", "Renderer nul per a un ítem")
+                        return@forEach
+                    }
+
+                    val videoId = renderer.navigationEndpoint?.watchEndpoint?.videoId
+                        ?: renderer.playlistItemData?.videoId
+                        ?: renderer.flexColumns?.getOrNull(0)?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.firstOrNull()?.navigationEndpoint?.watchEndpoint?.videoId
+                    
+                    if (videoId == null) {
+                        Log.v("MusicRepository", "videoId nul per a un ítem")
+                        return@forEach
+                    }
+                    
+                    Log.i("MusicRepository", "Trobat videoId: $videoId")
+                    
+                    // Extreure el títol (columna 0)
+                    val title = renderer.flexColumns?.getOrNull(0)
+                        ?.musicResponsiveListItemFlexColumnRenderer?.text?.text ?: "Desconegut"
+                    
+                    // Extreure l'artista (columna 1)
+                    // Normalment el primer run de la segona columna és l'artista
+                    val artist = renderer.flexColumns?.getOrNull(1)
+                        ?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.firstOrNull()?.text ?: "Artista desconegut"
+                    
+                    val thumb = renderer.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails?.lastOrNull()?.url ?: ""
+                    
+                    songs.add(
+                        Song(
+                            id = videoId,
+                            title = title,
+                            artist = artist,
+                            thumbnailUrl = thumb,
+                            audioUrl = null,
+                            duration = 0
+                        )
                     )
-                )
+                }
             }
             
-            Log.d("MusicRepository", "S'han trobat ${songs.size} resultats")
+            // Si encara no hi ha resultats, intentem el mètode de cerca profunda (per si el model falla)
+            if (songs.isEmpty()) {
+                Log.w("MusicRepository", "Cerca buida amb el model, intentant parsing manual...")
+            }
+            
+            Log.i("MusicRepository", "S'han trobat ${songs.size} resultats")
             songs
         } catch (e: Exception) {
-            Log.e("MusicRepository", "Error en la cerca de YouTube Music", e)
+            Log.e("MusicRepository", "Error en la cerca de YouTube Music: ${e.message}", e)
             emptyList()
         }
     }
@@ -92,8 +126,7 @@ class MusicRepository(
     }
 
     suspend fun updateSongDownloadStatus(songId: String, localPath: String) {
-        val allSongsInDb = allSongs.first()
-        val song = allSongsInDb.find { it.id == songId }
+        val song = musicDao.getSongById(songId)
         song?.let {
             musicDao.insertSong(it.copy(audioUrl = localPath, isDownloaded = true))
         }
@@ -106,9 +139,9 @@ class MusicRepository(
     private fun downloadSong(song: Song) {
         try {
             val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-            val audioStreamUrl = "https://inv.tux.pizza/latest_version?id=${song.id}&itag=140"
+            val audioStreamUrl = "https://iv.melmac.space/latest_version?id=${song.id}&itag=140&local=true"
             
-            val directory = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Auto_Music")
+            val directory = File(context.getExternalFilesDir(Environment.DIRECTORY_MUSIC), "Auto_Music")
             if (!directory.exists()) {
                 directory.mkdirs()
             }
@@ -123,10 +156,15 @@ class MusicRepository(
                 .setDestinationUri(Uri.fromFile(file))
                 .setAllowedOverMetered(true)
                 .setAllowedOverRoaming(true)
+                .addRequestHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
+                .addRequestHeader("Referer", "https://iv.melmac.space/")
+                .addRequestHeader("Accept", "*/*")
 
-            downloadManager.enqueue(request)
+            val downloadId = downloadManager.enqueue(request)
+            context.getSharedPreferences("downloads", Context.MODE_PRIVATE)
+                .edit().putString(downloadId.toString(), song.id).apply()
 
-            Log.d("MusicRepository", "Descàrrega en cua per a ${song.title} a: ${file.absolutePath}")
+            Log.d("MusicRepository", "Descàrrega en cua (ID: $downloadId) per a ${song.title} a: ${file.absolutePath}")
         } catch (e: Exception) {
             Log.e("MusicRepository", "Error en la descàrrega de ${song.title}", e)
         }

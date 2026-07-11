@@ -1,5 +1,6 @@
 package com.example.auto_music.data.remote
 
+import kotlinx.serialization.Serializable
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.engine.okhttp.OkHttp
@@ -16,6 +17,12 @@ import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.json.Json
 import android.util.Log
 
+import io.ktor.client.statement.*
+
+import kotlinx.serialization.json.*
+
+import com.example.auto_music.data.remote.model.PlayerResponse
+
 object InnertubeConstants {
     const val YOUTUBE_MUSIC_URL = "https://music.youtube.com"
     const val CHROME_WINDOWS_VISITOR_DATA = "Cgtfa01kaENlQ0p4Zyj938LFBjIKCgJVUxIEGgAgLw%3D%3D"
@@ -28,11 +35,19 @@ object InnertubeConstants {
     const val SEARCH_MASK = "contents.tabbedSearchResultsRenderer.tabs.tabRenderer.content.sectionListRenderer.contents.musicShelfRenderer(continuations,contents.$MUSIC_ITEM_RENDERER_MASK)"
 }
 
+@Serializable
+data class PlayerBody(
+    val context: InnerTubeContext,
+    val videoId: String,
+    val playlistId: String? = null
+)
+
 object Innertube {
     private val json = Json {
         ignoreUnknownKeys = true
         explicitNulls = false
         encodeDefaults = true
+        coerceInputValues = true
     }
 
     val client = HttpClient(OkHttp) {
@@ -41,7 +56,50 @@ object Innertube {
         }
     }
 
+    var visitorData: String = InnertubeConstants.CHROME_WINDOWS_VISITOR_DATA
+
     suspend fun search(query: String): InnerTubeResponse? {
+        val currentVisitorData = visitorData
+        return try {
+            val context = InnerTubeContext(
+                client = InnerTubeClient(
+                    clientName = InnertubeConstants.CLIENT_NAME,
+                    clientVersion = InnertubeConstants.CLIENT_VERSION,
+                    platform = "DESKTOP",
+                    hl = "en",
+                    gl = "US",
+                    visitorData = currentVisitorData,
+                    userAgent = InnertubeConstants.CHROME_WINDOWS_USER_AGENT,
+                    referer = "${InnertubeConstants.YOUTUBE_MUSIC_URL}/"
+                )
+            )
+            val body = SearchBody(query = query, context = context)
+            
+            val response = client.post("${InnertubeConstants.YOUTUBE_MUSIC_URL}/youtubei/v1/search") {
+                contentType(ContentType.Application.Json)
+                header("X-YouTube-Client-Name", InnertubeConstants.X_CLIENT_NAME)
+                header("X-YouTube-Client-Version", InnertubeConstants.CLIENT_VERSION)
+                header("X-Goog-Api-Key", InnertubeConstants.API_KEY)
+                // header("X-Goog-FieldMask", InnertubeConstants.SEARCH_MASK) // Temporarily disabled for debugging
+                header("X-Origin", InnertubeConstants.YOUTUBE_MUSIC_URL)
+                header("X-Youtube-Bootstrap-Logged-In", "false")
+                header(HttpHeaders.Referrer, "${InnertubeConstants.YOUTUBE_MUSIC_URL}/")
+                userAgent(InnertubeConstants.CHROME_WINDOWS_USER_AGENT)
+                parameter("prettyPrint", "false")
+                parameter("key", InnertubeConstants.API_KEY)
+                setBody(body)
+            }
+            val responseText = response.bodyAsText()
+            // Split log message to avoid truncation
+            responseText.chunked(3000).forEach { Log.d("Innertube", "Response chunk: $it") }
+            json.decodeFromString<InnerTubeResponse>(responseText)
+        } catch (e: Exception) {
+            Log.e("Innertube", "Search failed: ${e.message}", e)
+            null
+        }
+    }
+
+    suspend fun player(videoId: String): PlayerResponse? {
         return try {
             val context = InnerTubeContext(
                 client = InnerTubeClient(
@@ -55,26 +113,24 @@ object Innertube {
                     referer = "${InnertubeConstants.YOUTUBE_MUSIC_URL}/"
                 )
             )
-            val body = SearchBody(query = query, context = context)
+            val body = PlayerBody(context = context, videoId = videoId)
             
-            val response = client.post("${InnertubeConstants.YOUTUBE_MUSIC_URL}/youtubei/v1/search") {
+            val response = client.post("${InnertubeConstants.YOUTUBE_MUSIC_URL}/youtubei/v1/player") {
                 contentType(ContentType.Application.Json)
                 header("X-YouTube-Client-Name", InnertubeConstants.X_CLIENT_NAME)
                 header("X-YouTube-Client-Version", InnertubeConstants.CLIENT_VERSION)
                 header("X-Goog-Api-Key", InnertubeConstants.API_KEY)
-                header("X-Goog-FieldMask", InnertubeConstants.SEARCH_MASK)
                 header("X-Origin", InnertubeConstants.YOUTUBE_MUSIC_URL)
-                header("X-Youtube-Bootstrap-Logged-In", "false")
                 header(HttpHeaders.Referrer, "${InnertubeConstants.YOUTUBE_MUSIC_URL}/")
                 userAgent(InnertubeConstants.CHROME_WINDOWS_USER_AGENT)
                 parameter("prettyPrint", "false")
                 parameter("key", InnertubeConstants.API_KEY)
                 setBody(body)
-            }.body<InnerTubeResponse>()
-            
-            response
+            }
+            val responseText = response.bodyAsText()
+            json.decodeFromString<PlayerResponse>(responseText)
         } catch (e: Exception) {
-            Log.e("Innertube", "Search failed: ${e.message}", e)
+            Log.e("Innertube", "Player request failed: ${e.message}", e)
             null
         }
     }

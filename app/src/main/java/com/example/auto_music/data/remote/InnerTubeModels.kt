@@ -48,7 +48,8 @@ data class ResponseContext(
 
 @Serializable
 data class Contents(
-    val tabbedSearchResultsRenderer: TabbedSearchResultsRenderer? = null
+    val tabbedSearchResultsRenderer: TabbedSearchResultsRenderer? = null,
+    val sectionListRenderer: SectionListRenderer? = null
 )
 
 @Serializable
@@ -63,12 +64,12 @@ data class Tab(
 
 @Serializable
 data class TabRenderer(
-    val content: SectionList? = null,
+    val content: SectionListContent? = null,
     val title: String? = null
 )
 
 @Serializable
-data class SectionList(
+data class SectionListContent(
     val sectionListRenderer: SectionListRenderer? = null
 )
 
@@ -80,8 +81,11 @@ data class SectionListRenderer(
 @OptIn(ExperimentalSerializationApi::class)
 @Serializable
 data class SectionContent(
+    val musicShelfRenderer: MusicShelfRenderer? = null,
     @JsonNames("musicPlaylistShelfRenderer")
-    val musicShelfRenderer: MusicShelfRenderer? = null
+    val musicPlaylistShelfRenderer: MusicShelfRenderer? = null,
+    @JsonNames("musicImmersiveCarouselShelfRenderer")
+    val musicCarouselShelfRenderer: MusicShelfRenderer? = null
 )
 
 @Serializable
@@ -99,7 +103,13 @@ data class MusicItem(
 data class MusicResponsiveListItemRenderer(
     val navigationEndpoint: NavigationEndpoint? = null,
     val flexColumns: List<FlexColumn>? = null,
-    val thumbnail: ThumbnailRenderer? = null
+    val thumbnail: ThumbnailRenderer? = null,
+    val playlistItemData: PlaylistItemData? = null
+)
+
+@Serializable
+data class PlaylistItemData(
+    val videoId: String? = null
 )
 
 @Serializable
@@ -127,11 +137,15 @@ data class FlexColumnRenderer(
 @Serializable
 data class Runs(
     val runs: List<Run>? = null
-)
+) {
+    val text: String
+        get() = runs?.joinToString("") { it.text ?: "" } ?: ""
+}
 
 @Serializable
 data class Run(
-    val text: String? = null
+    val text: String? = null,
+    val navigationEndpoint: NavigationEndpoint? = null
 )
 
 @OptIn(ExperimentalSerializationApi::class)

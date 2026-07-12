@@ -60,19 +60,26 @@ class MusicService : MediaLibraryService() {
             ))
             .setAllowCrossProtocolRedirects(true)
 
-        val resolvingDataSourceFactory = ResolvingDataSource.Factory(httpDataSourceFactory) { dataSpec ->
+        val defaultDataSourceFactory = androidx.media3.datasource.DefaultDataSource.Factory(this, httpDataSourceFactory)
+
+        val resolvingDataSourceFactory = ResolvingDataSource.Factory(defaultDataSourceFactory) { dataSpec ->
             val videoId = dataSpec.key ?: return@Factory dataSpec
+            val uriString = dataSpec.uri.toString()
             
-            // Si la URI es un video ID o una URL que necesita resolución
-            if (!dataSpec.uri.toString().contains("googlevideo.com")) {
-                 val resolvedUrl = runBlocking {
-                     InnertubeResolver.resolveStreamUrl(videoId)
-                 }
-                 if (resolvedUrl != null) {
-                     android.util.Log.d("MusicService", "URL resolta per a $videoId: $resolvedUrl")
-                     return@Factory dataSpec.withUri(android.net.Uri.parse(resolvedUrl))
-                 }
+            // No resolguis si és un fitxer local o si ja és una URL de streaming de YouTube
+            if (uriString.startsWith("file") || uriString.contains("googlevideo.com")) {
+                return@Factory dataSpec
             }
+
+            val resolvedUrl = runBlocking {
+                InnertubeResolver.resolveStreamUrl(videoId)
+            }
+            
+            if (resolvedUrl != null) {
+                android.util.Log.d("MusicService", "URL resolta per a $videoId: $resolvedUrl")
+                return@Factory dataSpec.withUri(android.net.Uri.parse(resolvedUrl))
+            }
+
             dataSpec
         }
 
@@ -127,6 +134,10 @@ class MusicService : MediaLibraryService() {
     override fun onCreate() {
         super.onCreate()
         
+        serviceScope.launch {
+            com.example.auto_music.data.remote.Innertube.fetchVisitorData()
+        }
+        
         cache = PlayerCache.getInstance(applicationContext)
         val database = MusicDatabase.getDatabase(applicationContext)
         
@@ -177,6 +188,9 @@ class MusicService : MediaLibraryService() {
                             else -> "UNKNOWN"
                         }
                         android.util.Log.d("MusicService", "Estat del reproductor: $stateStr")
+                    }
+                    override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                        android.util.Log.d("MusicService", "Transició a MediaItem: ${mediaItem?.mediaMetadata?.title} (ID: ${mediaItem?.mediaId})")
                     }
                 })
             }

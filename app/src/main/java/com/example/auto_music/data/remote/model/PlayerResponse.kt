@@ -18,7 +18,7 @@ data class PlayerResponse(
 
     @Serializable
     data class StreamingData(
-        val expiresInSeconds: String? = null,
+        val expiresInSeconds: Int? = null,
         val formats: List<Format>? = null,
         val adaptiveFormats: List<Format>? = null
     ) {
@@ -36,7 +36,7 @@ data class PlayerResponse(
             val signatureCipher: String? = null,
             val cipher: String? = null
         ) {
-            val isAudio: Boolean get() = mimeType.startsWith("audio")
+            val isAudio: Boolean get() = width == null
         }
     }
 

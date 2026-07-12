@@ -6,6 +6,7 @@ import io.ktor.client.call.body
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.header
+import io.ktor.client.request.get
 import io.ktor.client.request.parameter
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
@@ -22,25 +23,19 @@ import io.ktor.client.statement.*
 import kotlinx.serialization.json.*
 
 import com.example.auto_music.data.remote.model.PlayerResponse
+import com.example.auto_music.data.remote.model.YouTubeClient
 
 object InnertubeConstants {
     const val YOUTUBE_MUSIC_URL = "https://music.youtube.com"
     const val CHROME_WINDOWS_VISITOR_DATA = "Cgtfa01kaENlQ0p4Zyj938LFBjIKCgJVUxIEGgAgLw%3D%3D"
     const val CHROME_WINDOWS_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.3"
-    const val API_KEY = "AIzaSyC9XL3ZjWddXya6X74dJoCTL-WEYFDNX30"
+    const val API_KEY = "AIzaSyDyT5W0Jh49F30Pqqtyfdf7pDLFKLJoAnw"
     const val CLIENT_NAME = "WEB_REMIX"
     const val X_CLIENT_NAME = "67"
-    const val CLIENT_VERSION = "1.20250416.01.00"
+    const val CLIENT_VERSION = "1.20260213.01.00"
     const val MUSIC_ITEM_RENDERER_MASK = "musicResponsiveListItemRenderer(flexColumns,fixedColumns,thumbnail,navigationEndpoint,badges)"
     const val SEARCH_MASK = "contents.tabbedSearchResultsRenderer.tabs.tabRenderer.content.sectionListRenderer.contents.musicShelfRenderer(continuations,contents.$MUSIC_ITEM_RENDERER_MASK)"
 }
-
-@Serializable
-data class PlayerBody(
-    val context: InnerTubeContext,
-    val videoId: String,
-    val playlistId: String? = null
-)
 
 object Innertube {
     private val json = Json {
@@ -57,6 +52,22 @@ object Innertube {
     }
 
     var visitorData: String = InnertubeConstants.CHROME_WINDOWS_VISITOR_DATA
+
+    suspend fun fetchVisitorData() {
+        try {
+            val response = client.get("https://music.youtube.com/sw.js_data")
+            val text = response.bodyAsText()
+            val regex = Regex("^Cg[t|s]")
+            // Simplified parsing
+            val match = Regex("Cg[a-zA-Z0-9_-]{38}").find(text)
+            match?.value?.let {
+                visitorData = it
+                Log.d("Innertube", "Fetched visitorData: $it")
+            }
+        } catch (e: Exception) {
+            Log.e("Innertube", "Failed to fetch visitorData: ${e.message}")
+        }
+    }
 
     suspend fun search(query: String): InnerTubeResponse? {
         val currentVisitorData = visitorData
@@ -77,13 +88,14 @@ object Innertube {
             
             val response = client.post("${InnertubeConstants.YOUTUBE_MUSIC_URL}/youtubei/v1/search") {
                 contentType(ContentType.Application.Json)
+                header("X-Goog-Api-Format-Version", "1")
                 header("X-YouTube-Client-Name", InnertubeConstants.X_CLIENT_NAME)
                 header("X-YouTube-Client-Version", InnertubeConstants.CLIENT_VERSION)
                 header("X-Goog-Api-Key", InnertubeConstants.API_KEY)
-                // header("X-Goog-FieldMask", InnertubeConstants.SEARCH_MASK) // Temporarily disabled for debugging
                 header("X-Origin", InnertubeConstants.YOUTUBE_MUSIC_URL)
                 header("X-Youtube-Bootstrap-Logged-In", "false")
                 header(HttpHeaders.Referrer, "${InnertubeConstants.YOUTUBE_MUSIC_URL}/")
+                header("X-Goog-Visitor-Id", currentVisitorData)
                 userAgent(InnertubeConstants.CHROME_WINDOWS_USER_AGENT)
                 parameter("prettyPrint", "false")
                 parameter("key", InnertubeConstants.API_KEY)
@@ -99,30 +111,44 @@ object Innertube {
         }
     }
 
-    suspend fun player(videoId: String): PlayerResponse? {
+    suspend fun player(
+        videoId: String,
+        clientType: YouTubeClient = YouTubeClient.WEB_REMIX,
+        signatureTimestamp: Int? = null
+    ): PlayerResponse? {
         return try {
-            val context = InnerTubeContext(
-                client = InnerTubeClient(
-                    clientName = InnertubeConstants.CLIENT_NAME,
-                    clientVersion = InnertubeConstants.CLIENT_VERSION,
-                    platform = "DESKTOP",
-                    hl = "en",
-                    gl = "US",
-                    visitorData = InnertubeConstants.CHROME_WINDOWS_VISITOR_DATA,
-                    userAgent = InnertubeConstants.CHROME_WINDOWS_USER_AGENT,
-                    referer = "${InnertubeConstants.YOUTUBE_MUSIC_URL}/"
-                )
+            val context = clientType.toContext(visitorData).let {
+                if (clientType.isEmbedded) {
+                    it.copy(
+                        thirdParty = InnerTubeContext.ThirdParty(
+                            embedUrl = "https://www.youtube.com/watch?v=${videoId}"
+                        )
+                    )
+                } else it
+            }
+            
+            val body = PlayerBody(
+                context = context,
+                videoId = videoId,
+                playbackContext = if (clientType.useSignatureTimestamp && signatureTimestamp != null) {
+                    PlayerBody.PlaybackContext(
+                        PlayerBody.PlaybackContext.ContentPlaybackContext(
+                            signatureTimestamp
+                        )
+                    )
+                } else null
             )
-            val body = PlayerBody(context = context, videoId = videoId)
             
             val response = client.post("${InnertubeConstants.YOUTUBE_MUSIC_URL}/youtubei/v1/player") {
                 contentType(ContentType.Application.Json)
-                header("X-YouTube-Client-Name", InnertubeConstants.X_CLIENT_NAME)
-                header("X-YouTube-Client-Version", InnertubeConstants.CLIENT_VERSION)
+                header("X-Goog-Api-Format-Version", "1")
+                header("X-YouTube-Client-Name", clientType.clientId)
+                header("X-YouTube-Client-Version", clientType.clientVersion)
                 header("X-Goog-Api-Key", InnertubeConstants.API_KEY)
                 header("X-Origin", InnertubeConstants.YOUTUBE_MUSIC_URL)
                 header(HttpHeaders.Referrer, "${InnertubeConstants.YOUTUBE_MUSIC_URL}/")
-                userAgent(InnertubeConstants.CHROME_WINDOWS_USER_AGENT)
+                header("X-Goog-Visitor-Id", visitorData)
+                userAgent(clientType.userAgent)
                 parameter("prettyPrint", "false")
                 parameter("key", InnertubeConstants.API_KEY)
                 setBody(body)

@@ -15,8 +15,14 @@ data class SearchBody(
 @Serializable
 data class InnerTubeContext(
     val client: InnerTubeClient,
-    val user: User = User()
-)
+    val user: User = User(),
+    val thirdParty: ThirdParty? = null
+) {
+    @Serializable
+    data class ThirdParty(
+        val embedUrl: String? = null
+    )
+}
 
 @Serializable
 data class InnerTubeClient(
@@ -27,8 +33,28 @@ data class InnerTubeClient(
     val gl: String = "US",
     val visitorData: String? = null,
     val userAgent: String? = null,
-    val referer: String? = null
+    val referer: String? = null,
+    val osName: String? = null,
+    val osVersion: String? = null
 )
+
+@Serializable
+data class PlayerBody(
+    val context: InnerTubeContext,
+    val videoId: String,
+    val playlistId: String? = null,
+    val playbackContext: PlaybackContext? = null
+) {
+    @Serializable
+    data class PlaybackContext(
+        val contentPlaybackContext: ContentPlaybackContext? = null
+    ) {
+        @Serializable
+        data class ContentPlaybackContext(
+            val signatureTimestamp: Int? = null
+        )
+    }
+}
 
 @Serializable
 data class User(

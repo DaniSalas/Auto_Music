@@ -12,8 +12,11 @@ import com.example.auto_music.data.remote.YouTubeService
 import com.example.auto_music.model.Playlist
 import com.example.auto_music.model.PlaylistSongCrossRef
 import com.example.auto_music.model.Song
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import java.io.File
 
 class MusicRepository(
@@ -137,36 +140,44 @@ class MusicRepository(
     }
 
     private fun downloadSong(song: Song) {
-        try {
-            val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-            val audioStreamUrl = "https://iv.melmac.space/latest_version?id=${song.id}&itag=140&local=true"
-            
-            val directory = File(context.getExternalFilesDir(Environment.DIRECTORY_MUSIC), "Auto_Music")
-            if (!directory.exists()) {
-                directory.mkdirs()
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val videoId = song.id
+                val audioStreamUrl = com.example.auto_music.player.InnertubeResolver.resolveStreamUrl(videoId)
+                
+                if (audioStreamUrl == null) {
+                    Log.e("MusicRepository", "No s'ha pogut resoldre la URL per descarregar ${song.title}")
+                    return@launch
+                }
+
+                val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+                
+                val directory = File(context.getExternalFilesDir(Environment.DIRECTORY_MUSIC), "Auto_Music")
+                if (!directory.exists()) {
+                    directory.mkdirs()
+                }
+
+                val fileName = "${song.title.replace(Regex("[\\\\/:*?\"<>|]"), "_")}.mp3"
+                val file = File(directory, fileName)
+
+                val request = DownloadManager.Request(Uri.parse(audioStreamUrl))
+                    .setTitle("Descarregant ${song.title}")
+                    .setDescription("Descarregant música d'Auto Music")
+                    .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                    .setDestinationUri(Uri.fromFile(file))
+                    .setAllowedOverMetered(true)
+                    .setAllowedOverRoaming(true)
+                    .addRequestHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
+                    .addRequestHeader("Referer", "https://music.youtube.com/")
+
+                val downloadId = downloadManager.enqueue(request)
+                context.getSharedPreferences("downloads", Context.MODE_PRIVATE)
+                    .edit().putString(downloadId.toString(), song.id).apply()
+
+                Log.d("MusicRepository", "Descàrrega en cua (ID: $downloadId) per a ${song.title} a: ${file.absolutePath}")
+            } catch (e: Exception) {
+                Log.e("MusicRepository", "Error en la descàrrega de ${song.title}", e)
             }
-
-            val fileName = "${song.title.replace(Regex("[\\\\/:*?\"<>|]"), "_")}.mp3"
-            val file = File(directory, fileName)
-
-            val request = DownloadManager.Request(audioStreamUrl.toUri())
-                .setTitle("Descarregant ${song.title}")
-                .setDescription("Descarregant música d'Auto Music")
-                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                .setDestinationUri(Uri.fromFile(file))
-                .setAllowedOverMetered(true)
-                .setAllowedOverRoaming(true)
-                .addRequestHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
-                .addRequestHeader("Referer", "https://iv.melmac.space/")
-                .addRequestHeader("Accept", "*/*")
-
-            val downloadId = downloadManager.enqueue(request)
-            context.getSharedPreferences("downloads", Context.MODE_PRIVATE)
-                .edit().putString(downloadId.toString(), song.id).apply()
-
-            Log.d("MusicRepository", "Descàrrega en cua (ID: $downloadId) per a ${song.title} a: ${file.absolutePath}")
-        } catch (e: Exception) {
-            Log.e("MusicRepository", "Error en la descàrrega de ${song.title}", e)
         }
     }
 }

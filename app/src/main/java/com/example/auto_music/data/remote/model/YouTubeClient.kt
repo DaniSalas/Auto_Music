@@ -75,5 +75,32 @@ data class YouTubeClient(
             useSignatureTimestamp = true,
             isEmbedded = true,
         )
+
+        val ANDROID = YouTubeClient(
+            clientName = "ANDROID",
+            clientVersion = "19.30.36",
+            clientId = "3",
+            userAgent = "com.google.android.youtube/19.30.36 (Linux; U; Android 14; en_US; Pixel 7 Pro; Build/AP2A.240705.004) [INFO_AND_TRACKING]",
+            loginSupported = true,
+            useSignatureTimestamp = true
+        )
+
+        val ANDROID_MUSIC = YouTubeClient(
+            clientName = "ANDROID_MUSIC",
+            clientVersion = "7.01.52",
+            clientId = "21",
+            userAgent = "com.google.android.apps.youtube.music/7.01.52 (Linux; U; Android 14; en_US; Pixel 7 Pro; Build/AP2A.240705.004) [INFO_AND_TRACKING]",
+            loginSupported = true,
+            useSignatureTimestamp = true
+        )
+
+        val ANDROID_VR = YouTubeClient(
+            clientName = "ANDROID_VR",
+            clientVersion = "1.60.19",
+            clientId = "47",
+            userAgent = "com.google.android.apps.youtube.vr/1.60.19 (Linux; U; Android 14; en_US; Pixel 7 Pro; Build/AP2A.240705.004) [INFO_AND_TRACKING]",
+            loginSupported = true,
+            useSignatureTimestamp = true
+        )
     }
 }

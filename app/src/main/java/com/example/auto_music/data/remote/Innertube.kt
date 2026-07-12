@@ -154,6 +154,11 @@ object Innertube {
                 setBody(body)
             }
             val responseText = response.bodyAsText()
+            
+            // Log raw response for debugging playback issues
+            Log.d("Innertube", "Player response for $videoId with ${clientType.clientName}")
+            responseText.chunked(3000).forEach { Log.d("Innertube", "Player chunk: $it") }
+
             json.decodeFromString<PlayerResponse>(responseText)
         } catch (e: Exception) {
             Log.e("Innertube", "Player request failed: ${e.message}", e)

@@ -54,4 +54,10 @@ class MainViewModel(private val repository: MusicRepository) : ViewModel() {
     fun getSongsInPlaylist(playlistId: Long): kotlinx.coroutines.flow.Flow<List<Song>> {
         return repository.getSongsInPlaylist(playlistId)
     }
+
+    fun removeSongFromPlaylist(song: Song, playlist: Playlist) {
+        viewModelScope.launch {
+            repository.removeSongFromPlaylist(song, playlist.id)
+        }
+    }
 }

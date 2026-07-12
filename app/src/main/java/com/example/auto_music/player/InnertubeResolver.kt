@@ -40,6 +40,48 @@ object InnertubeResolver {
             }
         }
 
+        // Try ANDROID_MUSIC
+        Log.i(TAG, "Fallback: Resolving $videoId with ANDROID_MUSIC")
+        val androidMusicResponse = try {
+            Innertube.player(videoId, YouTubeClient.ANDROID_MUSIC)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error calling Innertube.player (ANDROID_MUSIC)", e)
+            null
+        }
+        val androidMusicUrl = extractUrl(androidMusicResponse)
+        if (androidMusicUrl != null) {
+            cacheUrl(videoId, androidMusicUrl, androidMusicResponse?.streamingData?.expiresInSeconds)
+            return androidMusicUrl
+        }
+
+        // Try ANDROID
+        Log.i(TAG, "Fallback: Resolving $videoId with ANDROID")
+        val androidResponse = try {
+            Innertube.player(videoId, YouTubeClient.ANDROID)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error calling Innertube.player (ANDROID)", e)
+            null
+        }
+        val androidUrl = extractUrl(androidResponse)
+        if (androidUrl != null) {
+            cacheUrl(videoId, androidUrl, androidResponse?.streamingData?.expiresInSeconds)
+            return androidUrl
+        }
+
+        // Try ANDROID_VR
+        Log.i(TAG, "Fallback: Resolving $videoId with ANDROID_VR")
+        val androidVrResponse = try {
+            Innertube.player(videoId, YouTubeClient.ANDROID_VR)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error calling Innertube.player (ANDROID_VR)", e)
+            null
+        }
+        val androidVrUrl = extractUrl(androidVrResponse)
+        if (androidVrUrl != null) {
+            cacheUrl(videoId, androidVrUrl, androidVrResponse?.streamingData?.expiresInSeconds)
+            return androidVrUrl
+        }
+
         // Fallback to VISIONOS (No throttle gate, usually direct URLs)
         Log.i(TAG, "Fallback: Resolving $videoId with VISIONOS")
         val visionResponse = try {
@@ -92,7 +134,7 @@ object InnertubeResolver {
             Log.e(TAG, "Response is null")
             return null
         }
-        if (response.playabilityStatus.status != "OK") {
+        if (response.playabilityStatus != null && response.playabilityStatus.status != "OK") {
             Log.e(TAG, "Playability status not OK: ${response.playabilityStatus.status} - ${response.playabilityStatus.reason}")
             return null
         }

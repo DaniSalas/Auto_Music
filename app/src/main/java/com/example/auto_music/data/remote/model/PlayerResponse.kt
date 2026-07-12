@@ -5,7 +5,7 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class PlayerResponse(
-    val playabilityStatus: PlayabilityStatus,
+    val playabilityStatus: PlayabilityStatus? = null,
     val streamingData: StreamingData? = null,
     val videoDetails: VideoDetails? = null,
     val playerConfig: PlayerConfig? = null

@@ -35,4 +35,10 @@ interface MusicDao {
 
     @Query("DELETE FROM playlist_song_cross_ref WHERE playlistId = :playlistId AND songId = :songId")
     suspend fun removeSongFromPlaylist(playlistId: Long, songId: String)
+
+    @Query("SELECT COUNT(*) FROM playlist_song_cross_ref WHERE songId = :songId")
+    suspend fun getSongOccurrenceCount(songId: String): Int
+
+    @Delete
+    suspend fun deleteSong(song: Song)
 }

@@ -128,6 +128,28 @@ class MusicRepository(
         }
     }
 
+    suspend fun removeSongFromPlaylist(song: Song, playlistId: Long) {
+        musicDao.removeSongFromPlaylist(playlistId, song.id)
+        
+        // Verificar si la canción todavía está en alguna otra lista
+        val count = musicDao.getSongOccurrenceCount(song.id)
+        if (count == 0) {
+            // Si no está en ninguna lista, borrar archivo y de la tabla de canciones
+            song.audioUrl?.let { path ->
+                try {
+                    val file = File(path)
+                    if (file.exists()) {
+                        file.delete()
+                        Log.d("MusicRepository", "Arxiu esborrat: $path")
+                    }
+                } catch (e: Exception) {
+                    Log.e("MusicRepository", "Error esborrant arxiu: ${e.message}")
+                }
+            }
+            musicDao.deleteSong(song)
+        }
+    }
+
     suspend fun updateSongDownloadStatus(songId: String, localPath: String) {
         val song = musicDao.getSongById(songId)
         song?.let {

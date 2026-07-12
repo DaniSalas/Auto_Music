@@ -52,6 +52,7 @@ class MusicService : MediaLibraryService() {
     private lateinit var cache: SimpleCache
 
     private fun createDataSourceFactory(): androidx.media3.datasource.DataSource.Factory {
+        android.util.Log.d("MusicService", "Creant DataSourceFactory...")
         val httpDataSourceFactory = DefaultHttpDataSource.Factory()
             .setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
             .setDefaultRequestProperties(mapOf(
@@ -63,23 +64,40 @@ class MusicService : MediaLibraryService() {
         val defaultDataSourceFactory = androidx.media3.datasource.DefaultDataSource.Factory(this, httpDataSourceFactory)
 
         val resolvingDataSourceFactory = ResolvingDataSource.Factory(defaultDataSourceFactory) { dataSpec ->
-            val videoId = dataSpec.key ?: return@Factory dataSpec
             val uriString = dataSpec.uri.toString()
+            android.util.Log.d("MusicService", "ResolvingDataSource interceptant URI: $uriString")
+            android.util.Log.d("MusicService", "DataSpec details - key: ${dataSpec.key}, position: ${dataSpec.position}, length: ${dataSpec.length}")
             
-            // No resolguis si és un fitxer local o si ja és una URL de streaming de YouTube
+            // Si és un fitxer local o ja és una URL de streaming, no fem res
             if (uriString.startsWith("file") || uriString.contains("googlevideo.com")) {
+                android.util.Log.d("MusicService", "URI ja resolta o local, saltant resolució")
                 return@Factory dataSpec
             }
 
-            val resolvedUrl = runBlocking {
-                InnertubeResolver.resolveStreamUrl(videoId)
+            // Intentem obtenir el videoId de la key o de la URL
+            val videoId = dataSpec.key ?: uriString.substringAfter("v=", "").substringBefore("&")
+            
+            if (videoId.isEmpty()) {
+                android.util.Log.w("MusicService", "No s'ha pogut extreure videoId de $uriString")
+                return@Factory dataSpec
+            }
+
+            android.util.Log.i("MusicService", "Resolent stream per a videoId: $videoId")
+            val resolvedUrl = try {
+                runBlocking(Dispatchers.IO) {
+                    InnertubeResolver.resolveStreamUrl(videoId)
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("MusicService", "Error fatal en runBlocking per a $videoId", e)
+                null
             }
             
             if (resolvedUrl != null) {
-                android.util.Log.d("MusicService", "URL resolta per a $videoId: $resolvedUrl")
+                android.util.Log.d("MusicService", "URL resolta correctament per a $videoId")
                 return@Factory dataSpec.withUri(android.net.Uri.parse(resolvedUrl))
             }
 
+            android.util.Log.e("MusicService", "Resolució fallida per a $videoId")
             dataSpec
         }
 
@@ -190,7 +208,19 @@ class MusicService : MediaLibraryService() {
                         android.util.Log.d("MusicService", "Estat del reproductor: $stateStr")
                     }
                     override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                        android.util.Log.d("MusicService", "Transició a MediaItem: ${mediaItem?.mediaMetadata?.title} (ID: ${mediaItem?.mediaId})")
+                        android.util.Log.d("MusicService", "Transició a MediaItem: ${mediaItem?.mediaMetadata?.title} (ID: ${mediaItem?.mediaId}, URI: ${mediaItem?.localConfiguration?.uri})")
+                    }
+                    override fun onPositionDiscontinuity(
+                        oldPosition: androidx.media3.common.Player.PositionInfo,
+                        newPosition: androidx.media3.common.Player.PositionInfo,
+                        reason: Int
+                    ) {
+                        android.util.Log.d("MusicService", "Discontinuïtat de posició: raó=$reason")
+                    }
+                    override fun onEvents(player: androidx.media3.common.Player, events: androidx.media3.common.Player.Events) {
+                        if (events.contains(androidx.media3.common.Player.EVENT_PLAYBACK_STATE_CHANGED)) {
+                            android.util.Log.d("MusicService", "Event: Playback State Changed a ${player.playbackState}")
+                        }
                     }
                 })
             }
@@ -210,6 +240,28 @@ class MusicService : MediaLibraryService() {
     }
 
     private inner class LibrarySessionCallback : MediaLibrarySession.Callback {
+        override fun onAddMediaItems(
+            mediaSession: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            mediaItems: MutableList<MediaItem>
+        ): ListenableFuture<MutableList<MediaItem>> {
+            android.util.Log.d("MusicService", "onAddMediaItems rebuda per a ${mediaItems.size} items")
+            val updatedItems = mediaItems.map { item ->
+                android.util.Log.d("MusicService", "Processant item: ${item.mediaId}, URI: ${item.localConfiguration?.uri}")
+                if (item.localConfiguration?.uri == null && !item.mediaId.startsWith("PLAYLIST_") && item.mediaId != "ROOT") {
+                    // Si no té URI, potser hem de restaurar-la si la hem perdut en el transport
+                    android.util.Log.w("MusicService", "Item sense URI, restaurant per defecte per a ${item.mediaId}")
+                    item.buildUpon()
+                        .setUri("https://music.youtube.com/watch?v=${item.mediaId}")
+                        .setMimeType("audio/mpeg")
+                        .build()
+                } else {
+                    item
+                }
+            }.toMutableList()
+            return Futures.immediateFuture(updatedItems)
+        }
+
         override fun onGetLibraryRoot(
             session: MediaLibrarySession,
             browser: MediaSession.ControllerInfo,

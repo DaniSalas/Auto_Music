@@ -76,7 +76,19 @@ class MainActivity : ComponentActivity() {
                     val controllerFuture = androidx.media3.session.MediaController.Builder(context, sessionToken).buildAsync()
                     controllerFuture.addListener({
                         try {
-                            controller = controllerFuture.get()
+                            val newController = controllerFuture.get()
+                            newController.addListener(object : androidx.media3.common.Player.Listener {
+                                override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                                    android.util.Log.e("MainActivity", "Controller Player Error: ${error.message}", error)
+                                }
+                                override fun onPlaybackStateChanged(state: Int) {
+                                    android.util.Log.d("MainActivity", "Controller Playback State: $state")
+                                }
+                                override fun onMediaItemTransition(mediaItem: androidx.media3.common.MediaItem?, reason: Int) {
+                                    android.util.Log.d("MainActivity", "Controller MediaItem Transition: ${mediaItem?.mediaId}")
+                                }
+                            })
+                            controller = newController
                             android.util.Log.d("MainActivity", "MediaController connectat")
                         } catch (e: Exception) {
                             android.util.Log.e("MainActivity", "Error connectant MediaController", e)
@@ -136,6 +148,7 @@ fun MainApp(viewModel: MainViewModel, controller: androidx.media3.session.MediaC
                                     else
                                         "https://music.youtube.com/watch?v=${song.id}"
                                 )
+                                .setMimeType("audio/mpeg")
                                 .setCustomCacheKey(song.id)
                                 .setMediaMetadata(
                                     androidx.media3.common.MediaMetadata.Builder()
@@ -165,6 +178,7 @@ fun MainApp(viewModel: MainViewModel, controller: androidx.media3.session.MediaC
                                     else
                                         "https://music.youtube.com/watch?v=${song.id}"
                                 )
+                                .setMimeType("audio/mpeg") // Forcem a que ExoPlayer intenti obrir-lo com a stream progressiu
                                 .setCustomCacheKey(song.id)
                                 .setMediaMetadata(
                                     androidx.media3.common.MediaMetadata.Builder()

@@ -16,6 +16,7 @@ data class YouTubeClient(
     val useSignatureTimestamp: Boolean = false,
     val isEmbedded: Boolean = false,
     val useWebPoTokens: Boolean = false,
+    val isMusic: Boolean = false
 ) {
     fun toContext(visitorData: String?) = InnerTubeContext(
         client = InnerTubeClient(
@@ -23,9 +24,24 @@ data class YouTubeClient(
             clientVersion = clientVersion,
             visitorData = visitorData,
             userAgent = userAgent,
-            platform = if (clientName == "WEB_REMIX") "DESKTOP" else if (clientName == "VISIONOS") "VISIONOS" else "MOBILE",
-            osName = if (clientName == "VISIONOS") "visionOS" else null,
-            osVersion = if (clientName == "VISIONOS") "1.3.21O771" else null
+            platform = when (clientName) {
+                "WEB_REMIX" -> "DESKTOP"
+                "IOS", "VISIONOS" -> "IOS"
+                "ANDROID", "ANDROID_MUSIC", "ANDROID_VR" -> "ANDROID"
+                else -> "MOBILE"
+            },
+            osName = when {
+                clientName == "VISIONOS" -> "visionOS"
+                clientName == "IOS" -> "iOS"
+                clientName.startsWith("ANDROID") -> "Android"
+                else -> null
+            },
+            osVersion = when {
+                clientName == "VISIONOS" -> "1.3.21O771"
+                clientName == "IOS" -> "17.5.1"
+                clientName.startsWith("ANDROID") -> "14"
+                else -> null
+            }
         )
     )
 
@@ -34,6 +50,7 @@ data class YouTubeClient(
         const val ORIGIN_YOUTUBE_MUSIC = "https://music.youtube.com"
         const val REFERER_YOUTUBE_MUSIC = "https://music.youtube.com/"
         const val API_URL_YOUTUBE_MUSIC = "https://music.youtube.com/youtubei/v1/"
+        const val API_URL_YOUTUBE = "https://www.youtube.com/youtubei/v1/"
 
         val WEB_REMIX = YouTubeClient(
             clientName = "WEB_REMIX",
@@ -43,6 +60,25 @@ data class YouTubeClient(
             loginSupported = true,
             useSignatureTimestamp = true,
             useWebPoTokens = true,
+            isMusic = true
+        )
+
+        val IOS = YouTubeClient(
+            clientName = "IOS",
+            clientVersion = "19.29.1",
+            clientId = "2",
+            userAgent = "com.google.ios.youtube/19.29.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X;)",
+            loginSupported = false,
+            useSignatureTimestamp = true
+        )
+
+        val MWEB = YouTubeClient(
+            clientName = "MWEB",
+            clientVersion = "2.20240722.00.00",
+            clientId = "6",
+            userAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+            loginSupported = false,
+            useSignatureTimestamp = true
         )
 
         val VISIONOS = YouTubeClient(
@@ -91,7 +127,8 @@ data class YouTubeClient(
             clientId = "21",
             userAgent = "com.google.android.apps.youtube.music/7.01.52 (Linux; U; Android 14; en_US; Pixel 7 Pro; Build/AP2A.240705.004) [INFO_AND_TRACKING]",
             loginSupported = true,
-            useSignatureTimestamp = true
+            useSignatureTimestamp = true,
+            isMusic = true
         )
 
         val ANDROID_VR = YouTubeClient(

@@ -8,14 +8,23 @@ import android.util.Log
 
 object InnertubeResolver {
     private const val TAG = "InnertubeResolver"
-    private val cachedUrls = mutableMapOf<String, Pair<String, Long>>()
+    private val cachedUrls = mutableMapOf<String, Pair<ResolvedStream, Long>>()
+
+    data class ResolvedStream(
+        val url: String,
+        val userAgent: String
+    )
 
     suspend fun resolveStreamUrl(videoId: String): String? {
+        return resolveStream(videoId)?.url
+    }
+
+    suspend fun resolveStream(videoId: String): ResolvedStream? {
         // Check cache first
-        cachedUrls[videoId]?.let { (url, expiry) ->
+        cachedUrls[videoId]?.let { (stream, expiry) ->
             if (System.currentTimeMillis() < expiry) {
-                Log.d(TAG, "Using cached URL for $videoId")
-                return url
+                Log.d(TAG, "Using cached stream for $videoId")
+                return stream
             }
         }
 
@@ -31,13 +40,29 @@ object InnertubeResolver {
         
         if (webRemixUrl != null) {
             Log.d(TAG, "Testing WEB_REMIX URL...")
-            if (validateUrl(webRemixUrl)) {
+            if (validateUrl(webRemixUrl, YouTubeClient.WEB_REMIX.userAgent)) {
                 Log.i(TAG, "WEB_REMIX URL is valid")
-                cacheUrl(videoId, webRemixUrl, webRemixResponse?.streamingData?.expiresInSeconds)
-                return webRemixUrl
+                val stream = ResolvedStream(webRemixUrl, YouTubeClient.WEB_REMIX.userAgent)
+                cacheStream(videoId, stream, webRemixResponse?.streamingData?.expiresInSeconds)
+                return stream
             } else {
                 Log.w(TAG, "WEB_REMIX URL validation failed")
             }
+        }
+
+        // Try IOS (Often provides direct URLs and is very reliable)
+        Log.i(TAG, "Fallback: Resolving $videoId with IOS")
+        val iosResponse = try {
+            Innertube.player(videoId, YouTubeClient.IOS)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error calling Innertube.player (IOS)", e)
+            null
+        }
+        val iosUrl = extractUrl(iosResponse)
+        if (iosUrl != null) {
+            val stream = ResolvedStream(iosUrl, YouTubeClient.IOS.userAgent)
+            cacheStream(videoId, stream, iosResponse?.streamingData?.expiresInSeconds)
+            return stream
         }
 
         // Try ANDROID_MUSIC
@@ -50,8 +75,24 @@ object InnertubeResolver {
         }
         val androidMusicUrl = extractUrl(androidMusicResponse)
         if (androidMusicUrl != null) {
-            cacheUrl(videoId, androidMusicUrl, androidMusicResponse?.streamingData?.expiresInSeconds)
-            return androidMusicUrl
+            val stream = ResolvedStream(androidMusicUrl, YouTubeClient.ANDROID_MUSIC.userAgent)
+            cacheStream(videoId, stream, androidMusicResponse?.streamingData?.expiresInSeconds)
+            return stream
+        }
+
+        // Try MWEB
+        Log.i(TAG, "Fallback: Resolving $videoId with MWEB")
+        val mwebResponse = try {
+            Innertube.player(videoId, YouTubeClient.MWEB)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error calling Innertube.player (MWEB)", e)
+            null
+        }
+        val mwebUrl = extractUrl(mwebResponse)
+        if (mwebUrl != null) {
+            val stream = ResolvedStream(mwebUrl, YouTubeClient.MWEB.userAgent)
+            cacheStream(videoId, stream, mwebResponse?.streamingData?.expiresInSeconds)
+            return stream
         }
 
         // Try ANDROID
@@ -64,8 +105,9 @@ object InnertubeResolver {
         }
         val androidUrl = extractUrl(androidResponse)
         if (androidUrl != null) {
-            cacheUrl(videoId, androidUrl, androidResponse?.streamingData?.expiresInSeconds)
-            return androidUrl
+            val stream = ResolvedStream(androidUrl, YouTubeClient.ANDROID.userAgent)
+            cacheStream(videoId, stream, androidResponse?.streamingData?.expiresInSeconds)
+            return stream
         }
 
         // Try ANDROID_VR
@@ -78,11 +120,12 @@ object InnertubeResolver {
         }
         val androidVrUrl = extractUrl(androidVrResponse)
         if (androidVrUrl != null) {
-            cacheUrl(videoId, androidVrUrl, androidVrResponse?.streamingData?.expiresInSeconds)
-            return androidVrUrl
+            val stream = ResolvedStream(androidVrUrl, YouTubeClient.ANDROID_VR.userAgent)
+            cacheStream(videoId, stream, androidVrResponse?.streamingData?.expiresInSeconds)
+            return stream
         }
 
-        // Fallback to VISIONOS (No throttle gate, usually direct URLs)
+        // Fallback to VISIONOS (Uses IOS platform now)
         Log.i(TAG, "Fallback: Resolving $videoId with VISIONOS")
         val visionResponse = try {
             Innertube.player(videoId, YouTubeClient.VISIONOS)
@@ -91,10 +134,10 @@ object InnertubeResolver {
             null
         }
         val visionUrl = extractUrl(visionResponse)
-        
         if (visionUrl != null) {
-            cacheUrl(videoId, visionUrl, visionResponse?.streamingData?.expiresInSeconds)
-            return visionUrl
+            val stream = ResolvedStream(visionUrl, YouTubeClient.VISIONOS.userAgent)
+            cacheStream(videoId, stream, visionResponse?.streamingData?.expiresInSeconds)
+            return stream
         }
 
         // Last ditch effort: TVHTML5 (sometimes bypasses restrictions)
@@ -107,8 +150,9 @@ object InnertubeResolver {
         }
         val tvUrl = extractUrl(tvResponse)
         if (tvUrl != null) {
-            cacheUrl(videoId, tvUrl, tvResponse?.streamingData?.expiresInSeconds)
-            return tvUrl
+            val stream = ResolvedStream(tvUrl, YouTubeClient.TVHTML5.userAgent)
+            cacheStream(videoId, stream, tvResponse?.streamingData?.expiresInSeconds)
+            return stream
         }
 
         // Fallback: TVHTML5_EMBEDDED (Bypasses age restrictions)
@@ -121,8 +165,9 @@ object InnertubeResolver {
         }
         val tvEmbedUrl = extractUrl(tvEmbedResponse)
         if (tvEmbedUrl != null) {
-            cacheUrl(videoId, tvEmbedUrl, tvEmbedResponse?.streamingData?.expiresInSeconds)
-            return tvEmbedUrl
+            val stream = ResolvedStream(tvEmbedUrl, YouTubeClient.TVHTML5_EMBEDDED.userAgent)
+            cacheStream(videoId, stream, tvEmbedResponse?.streamingData?.expiresInSeconds)
+            return stream
         }
 
         Log.e(TAG, "Failed to resolve any playable URL for $videoId")
@@ -153,11 +198,6 @@ object InnertubeResolver {
 
         Log.i(TAG, "Found ${formats.size} formats. Filtering for audio...")
         
-        // Log all formats for debugging
-        formats.forEach { format ->
-            Log.d(TAG, "Format: itag=${format.itag}, mimeType=${format.mimeType}, hasUrl=${format.url != null}, hasCipher=${format.signatureCipher != null}")
-        }
-        
         // Find best audio format
         val audioFormats = formats.filter { it.isAudio }
         Log.i(TAG, "Found ${audioFormats.size} audio formats")
@@ -169,7 +209,7 @@ object InnertubeResolver {
         if (url == null && audioFormat?.signatureCipher != null) {
             Log.i(TAG, "Found signatureCipher for format ${audioFormat.itag}. Attempting to extract URL.")
             url = decodeSignatureCipher(audioFormat.signatureCipher)
-        } else if (url == null && audioFormat?.cipher != null) {
+        } else if (url == null && audioFormat?.signatureCipher == null && audioFormat?.cipher != null) {
             Log.i(TAG, "Found cipher for format ${audioFormat.itag}. Attempting to extract URL.")
             url = decodeSignatureCipher(audioFormat.cipher)
         }
@@ -209,11 +249,11 @@ object InnertubeResolver {
         }
     }
 
-    private suspend fun validateUrl(url: String): Boolean {
+    private suspend fun validateUrl(url: String, userAgent: String): Boolean {
         return try {
              val response = Innertube.client.get(url) {
                  header("Range", "bytes=0-1")
-                 header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
+                 header("User-Agent", userAgent)
                  header("Referer", "https://music.youtube.com/")
                  header("Origin", "https://music.youtube.com")
              }
@@ -228,8 +268,8 @@ object InnertubeResolver {
         }
     }
 
-    private fun cacheUrl(videoId: String, url: String, expiresInSeconds: Int?) {
+    private fun cacheStream(videoId: String, stream: ResolvedStream, expiresInSeconds: Int?) {
         val expiresIn = expiresInSeconds?.toLong() ?: 21600L
-        cachedUrls[videoId] = url to (System.currentTimeMillis() + (expiresIn * 1000) - 60000)
+        cachedUrls[videoId] = stream to (System.currentTimeMillis() + (expiresIn * 1000) - 60000)
     }
 }

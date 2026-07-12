@@ -114,7 +114,7 @@ object Innertube {
     suspend fun player(
         videoId: String,
         clientType: YouTubeClient = YouTubeClient.WEB_REMIX,
-        signatureTimestamp: Int? = null
+        signatureTimestamp: Int? = 20340
     ): PlayerResponse? {
         return try {
             val context = clientType.toContext(visitorData).let {
@@ -130,7 +130,7 @@ object Innertube {
             val body = PlayerBody(
                 context = context,
                 videoId = videoId,
-                playbackContext = if (clientType.useSignatureTimestamp && signatureTimestamp != null) {
+                playbackContext = if (clientType.useSignatureTimestamp) {
                     PlayerBody.PlaybackContext(
                         PlayerBody.PlaybackContext.ContentPlaybackContext(
                             signatureTimestamp
@@ -139,14 +139,20 @@ object Innertube {
                 } else null
             )
             
-            val response = client.post("${InnertubeConstants.YOUTUBE_MUSIC_URL}/youtubei/v1/player") {
+            val baseUrl = if (clientType.isMusic) InnertubeConstants.YOUTUBE_MUSIC_URL else "https://www.youtube.com"
+            
+            val response = client.post("${baseUrl}/youtubei/v1/player") {
                 contentType(ContentType.Application.Json)
                 header("X-Goog-Api-Format-Version", "1")
                 header("X-YouTube-Client-Name", clientType.clientId)
                 header("X-YouTube-Client-Version", clientType.clientVersion)
                 header("X-Goog-Api-Key", InnertubeConstants.API_KEY)
-                header("X-Origin", InnertubeConstants.YOUTUBE_MUSIC_URL)
-                header(HttpHeaders.Referrer, "${InnertubeConstants.YOUTUBE_MUSIC_URL}/")
+                
+                if (clientType.isMusic) {
+                    header("X-Origin", InnertubeConstants.YOUTUBE_MUSIC_URL)
+                    header(HttpHeaders.Referrer, "${InnertubeConstants.YOUTUBE_MUSIC_URL}/")
+                }
+
                 header("X-Goog-Visitor-Id", visitorData)
                 userAgent(clientType.userAgent)
                 parameter("prettyPrint", "false")

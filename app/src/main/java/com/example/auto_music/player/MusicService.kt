@@ -83,18 +83,18 @@ class MusicService : MediaLibraryService() {
             }
 
             android.util.Log.i("MusicService", "Resolent stream per a videoId: $videoId")
-            val resolvedUrl = try {
+            val stream = try {
                 runBlocking(Dispatchers.IO) {
-                    InnertubeResolver.resolveStreamUrl(videoId)
+                    InnertubeResolver.resolveStream(videoId)
                 }
             } catch (e: Exception) {
                 android.util.Log.e("MusicService", "Error fatal en runBlocking per a $videoId", e)
                 null
             }
             
-            if (resolvedUrl != null) {
+            if (stream != null) {
                 android.util.Log.d("MusicService", "URL resolta correctament per a $videoId")
-                return@Factory dataSpec.withUri(android.net.Uri.parse(resolvedUrl))
+                return@Factory dataSpec.withUri(android.net.Uri.parse(stream.url))
             }
 
             android.util.Log.e("MusicService", "Resolució fallida per a $videoId")

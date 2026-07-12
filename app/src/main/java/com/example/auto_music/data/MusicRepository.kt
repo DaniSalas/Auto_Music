@@ -165,9 +165,9 @@ class MusicRepository(
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val videoId = song.id
-                val audioStreamUrl = com.example.auto_music.player.InnertubeResolver.resolveStreamUrl(videoId)
+                val stream = com.example.auto_music.player.InnertubeResolver.resolveStream(videoId)
                 
-                if (audioStreamUrl == null) {
+                if (stream == null) {
                     Log.e("MusicRepository", "No s'ha pogut resoldre la URL per descarregar ${song.title}")
                     return@launch
                 }
@@ -182,14 +182,14 @@ class MusicRepository(
                 val fileName = "${song.title.replace(Regex("[\\\\/:*?\"<>|]"), "_")}.mp3"
                 val file = File(directory, fileName)
 
-                val request = DownloadManager.Request(Uri.parse(audioStreamUrl))
+                val request = DownloadManager.Request(Uri.parse(stream.url))
                     .setTitle("Descarregant ${song.title}")
                     .setDescription("Descarregant música d'Auto Music")
                     .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                     .setDestinationUri(Uri.fromFile(file))
                     .setAllowedOverMetered(true)
                     .setAllowedOverRoaming(true)
-                    .addRequestHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
+                    .addRequestHeader("User-Agent", stream.userAgent)
                     .addRequestHeader("Referer", "https://music.youtube.com/")
 
                 val downloadId = downloadManager.enqueue(request)

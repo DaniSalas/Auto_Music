@@ -57,12 +57,29 @@ object Innertube {
         try {
             val response = client.get("https://music.youtube.com/sw.js_data")
             val text = response.bodyAsText()
-            val regex = Regex("^Cg[t|s]")
-            // Simplified parsing
+            
+            // Try robust parsing similar to kreate_imp
+            val jsonText = text.substringAfter(")]}'", "").trim()
+            if (jsonText.isNotEmpty()) {
+                val jsonElement = json.parseToJsonElement(jsonText)
+                val visitorId = jsonElement.jsonArray.getOrNull(0)
+                    ?.jsonArray?.getOrNull(2)
+                    ?.jsonArray?.firstOrNull { 
+                        it.jsonPrimitive.contentOrNull?.startsWith("Cg") == true 
+                    }?.jsonPrimitive?.contentOrNull
+                
+                if (visitorId != null) {
+                    visitorData = visitorId
+                    Log.d("Innertube", "Fetched visitorData (robust): $visitorId")
+                    return
+                }
+            }
+            
+            // Fallback to regex if robust parsing fails
             val match = Regex("Cg[a-zA-Z0-9_-]{38}").find(text)
             match?.value?.let {
                 visitorData = it
-                Log.d("Innertube", "Fetched visitorData: $it")
+                Log.d("Innertube", "Fetched visitorData (regex): $it")
             }
         } catch (e: Exception) {
             Log.e("Innertube", "Failed to fetch visitorData: ${e.message}")
@@ -146,7 +163,7 @@ object Innertube {
                 header("X-Goog-Api-Format-Version", "1")
                 header("X-YouTube-Client-Name", clientType.clientId)
                 header("X-YouTube-Client-Version", clientType.clientVersion)
-                header("X-Goog-Api-Key", InnertubeConstants.API_KEY)
+                header("X-Goog-Api-Key", clientType.apiKey)
                 
                 if (clientType.isMusic) {
                     header("X-Origin", InnertubeConstants.YOUTUBE_MUSIC_URL)
@@ -156,7 +173,7 @@ object Innertube {
                 header("X-Goog-Visitor-Id", visitorData)
                 userAgent(clientType.userAgent)
                 parameter("prettyPrint", "false")
-                parameter("key", InnertubeConstants.API_KEY)
+                parameter("key", clientType.apiKey)
                 setBody(body)
             }
             val responseText = response.bodyAsText()

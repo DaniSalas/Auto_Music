@@ -28,14 +28,17 @@ data class InnerTubeContext(
 data class InnerTubeClient(
     val clientName: String,
     val clientVersion: String,
-    val platform: String? = "DESKTOP",
     val hl: String = "en",
     val gl: String = "US",
     val visitorData: String? = null,
     val userAgent: String? = null,
     val referer: String? = null,
     val osName: String? = null,
-    val osVersion: String? = null
+    val osVersion: String? = null,
+    val platform: String? = null,
+    val androidSdkVersion: Int? = null,
+    val deviceMake: String? = null,
+    val deviceModel: String? = null
 )
 
 @Serializable

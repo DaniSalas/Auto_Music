@@ -121,11 +121,16 @@ class MusicRepository(
 
     suspend fun addSongToPlaylist(song: Song, playlistId: Long) {
         musicDao.insertSong(song)
-        musicDao.insertSongToPlaylist(PlaylistSongCrossRef(playlistId, song.id))
+        val maxPos = musicDao.getMaxPosition(playlistId) ?: -1
+        musicDao.insertSongToPlaylist(PlaylistSongCrossRef(playlistId, song.id, maxPos + 1))
         
         if (!song.isDownloaded) {
             downloadSong(song)
         }
+    }
+
+    suspend fun updateSongOrder(playlistId: Long, songs: List<Song>) {
+        musicDao.updateSongOrder(playlistId, songs.map { it.id })
     }
 
     suspend fun removeSongFromPlaylist(song: Song, playlistId: Long) {

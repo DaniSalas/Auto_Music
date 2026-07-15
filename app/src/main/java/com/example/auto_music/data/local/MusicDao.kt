@@ -27,8 +27,16 @@ interface MusicDao {
     suspend fun insertSongToPlaylist(crossRef: PlaylistSongCrossRef)
 
     @Transaction
-    @Query("SELECT * FROM songs WHERE id IN (SELECT songId FROM playlist_song_cross_ref WHERE playlistId = :playlistId)")
+    @Query("""
+        SELECT songs.* FROM songs 
+        INNER JOIN playlist_song_cross_ref ON songs.id = playlist_song_cross_ref.songId 
+        WHERE playlist_song_cross_ref.playlistId = :playlistId 
+        ORDER BY playlist_song_cross_ref.position ASC
+    """)
     fun getSongsInPlaylist(playlistId: Long): Flow<List<Song>>
+
+    @Query("SELECT MAX(position) FROM playlist_song_cross_ref WHERE playlistId = :playlistId")
+    suspend fun getMaxPosition(playlistId: Long): Int?
 
     @Delete
     suspend fun deletePlaylist(playlist: Playlist)
@@ -41,4 +49,14 @@ interface MusicDao {
 
     @Delete
     suspend fun deleteSong(song: Song)
+    
+    @Transaction
+    suspend fun updateSongOrder(playlistId: Long, songIds: List<String>) {
+        songIds.forEachIndexed { index, songId ->
+            updateSongPosition(playlistId, songId, index)
+        }
+    }
+
+    @Query("UPDATE playlist_song_cross_ref SET position = :position WHERE playlistId = :playlistId AND songId = :songId")
+    suspend fun updateSongPosition(playlistId: Long, songId: String, position: Int)
 }

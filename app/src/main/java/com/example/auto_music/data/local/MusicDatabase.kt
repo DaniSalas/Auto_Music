@@ -10,7 +10,7 @@ import com.example.auto_music.model.Song
 
 @Database(
     entities = [Song::class, Playlist::class, PlaylistSongCrossRef::class],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class MusicDatabase : RoomDatabase() {
@@ -26,7 +26,9 @@ abstract class MusicDatabase : RoomDatabase() {
                     context.applicationContext,
                     MusicDatabase::class.java,
                     "music_db"
-                ).build()
+                )
+                .fallbackToDestructiveMigration()
+                .build()
                 INSTANCE = instance
                 instance
             }

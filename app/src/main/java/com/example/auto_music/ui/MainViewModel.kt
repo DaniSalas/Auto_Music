@@ -24,6 +24,7 @@ class MainViewModel(private val repository: MusicRepository) : ViewModel() {
     init {
         viewModelScope.launch {
             repository.allPlaylists.collect {
+                android.util.Log.d("MainViewModel", "Playlists updated: ${it.size}")
                 _playlists.value = it
             }
         }
@@ -58,6 +59,12 @@ class MainViewModel(private val repository: MusicRepository) : ViewModel() {
     fun removeSongFromPlaylist(song: Song, playlist: Playlist) {
         viewModelScope.launch {
             repository.removeSongFromPlaylist(song, playlist.id)
+        }
+    }
+
+    fun reorderSongs(playlistId: Long, songs: List<Song>) {
+        viewModelScope.launch {
+            repository.updateSongOrder(playlistId, songs)
         }
     }
 }

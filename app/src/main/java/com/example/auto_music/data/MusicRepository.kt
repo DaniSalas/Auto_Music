@@ -174,19 +174,13 @@ class MusicRepository(
 
                 val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
                 
-                val directory = File(context.getExternalFilesDir(Environment.DIRECTORY_MUSIC), "Auto_Music")
-                if (!directory.exists()) {
-                    directory.mkdirs()
-                }
-
                 val fileName = "${song.title.replace(Regex("[\\\\/:*?\"<>|]"), "_")}.mp3"
-                val file = File(directory, fileName)
 
                 val request = DownloadManager.Request(Uri.parse(stream.url))
                     .setTitle("Descarregant ${song.title}")
                     .setDescription("Descarregant música d'Auto Music")
                     .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                    .setDestinationUri(Uri.fromFile(file))
+                    .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "auto_music/$fileName")
                     .setAllowedOverMetered(true)
                     .setAllowedOverRoaming(true)
                     .addRequestHeader("User-Agent", stream.userAgent)
@@ -196,7 +190,7 @@ class MusicRepository(
                 context.getSharedPreferences("downloads", Context.MODE_PRIVATE)
                     .edit().putString(downloadId.toString(), song.id).apply()
 
-                Log.d("MusicRepository", "Descàrrega en cua (ID: $downloadId) per a ${song.title} a: ${file.absolutePath}")
+                Log.d("MusicRepository", "Descàrrega en cua (ID: $downloadId) per a ${song.title} a la carpeta Downloads/auto_music")
             } catch (e: Exception) {
                 Log.e("MusicRepository", "Error en la descàrrega de ${song.title}", e)
             }

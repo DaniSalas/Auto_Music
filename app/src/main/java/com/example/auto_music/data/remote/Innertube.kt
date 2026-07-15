@@ -58,31 +58,53 @@ object Innertube {
             val response = client.get("https://music.youtube.com/sw.js_data")
             val text = response.bodyAsText()
             
-            // Try robust parsing similar to kreate_imp
             val jsonText = text.substringAfter(")]}'", "").trim()
             if (jsonText.isNotEmpty()) {
-                val jsonElement = json.parseToJsonElement(jsonText)
-                val visitorId = jsonElement.jsonArray.getOrNull(0)
-                    ?.jsonArray?.getOrNull(2)
-                    ?.jsonArray?.firstOrNull { 
-                        it.jsonPrimitive.contentOrNull?.startsWith("Cg") == true 
-                    }?.jsonPrimitive?.contentOrNull
-                
-                if (visitorId != null) {
-                    visitorData = visitorId
-                    Log.d("Innertube", "Fetched visitorData (robust): $visitorId")
-                    return
+                try {
+                    val jsonElement = json.parseToJsonElement(jsonText)
+                    
+                    fun findVisitorData(element: JsonElement): String? {
+                        return when (element) {
+                            is JsonPrimitive -> {
+                                val content = element.contentOrNull
+                                if (content?.startsWith("Cg") == true && content.length >= 35) content else null
+                            }
+                            is JsonArray -> {
+                                for (item in element) {
+                                    val found = findVisitorData(item)
+                                    if (found != null) return found
+                                }
+                                null
+                            }
+                            is JsonObject -> {
+                                for (item in element.values) {
+                                    val found = findVisitorData(item)
+                                    if (found != null) return found
+                                }
+                                null
+                            }
+                        }
+                    }
+
+                    val visitorId = findVisitorData(jsonElement)
+                    if (visitorId != null) {
+                        visitorData = visitorId
+                        Log.i("Innertube", "Fetched visitorData (robust search): $visitorId")
+                        return
+                    }
+                } catch (e: Exception) {
+                    Log.w("Innertube", "Robust parsing failed, trying regex")
                 }
             }
             
-            // Fallback to regex if robust parsing fails
-            val match = Regex("Cg[a-zA-Z0-9_-]{38}").find(text)
+            // Fallback to regex
+            val match = Regex("Cg[a-zA-Z0-9_-]{35,45}").find(text)
             match?.value?.let {
                 visitorData = it
-                Log.d("Innertube", "Fetched visitorData (regex): $it")
+                Log.i("Innertube", "Fetched visitorData (regex): $it")
             }
         } catch (e: Exception) {
-            Log.e("Innertube", "Failed to fetch visitorData: ${e.message}")
+            Log.e("Innertube", "Failed to fetch visitorData: ${e.message}", e)
         }
     }
 
@@ -93,7 +115,6 @@ object Innertube {
                 client = InnerTubeClient(
                     clientName = InnertubeConstants.CLIENT_NAME,
                     clientVersion = InnertubeConstants.CLIENT_VERSION,
-                    platform = "DESKTOP",
                     hl = "en",
                     gl = "US",
                     visitorData = currentVisitorData,
@@ -128,10 +149,15 @@ object Innertube {
         }
     }
 
+    private fun generateCpn(): String {
+        val chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+        return (1..16).map { chars.random() }.joinToString("")
+    }
+
     suspend fun player(
         videoId: String,
         clientType: YouTubeClient = YouTubeClient.WEB_REMIX,
-        signatureTimestamp: Int? = 20340
+        signatureTimestamp: Int? = 20465
     ): PlayerResponse? {
         return try {
             val context = clientType.toContext(visitorData).let {
@@ -147,6 +173,7 @@ object Innertube {
             val body = PlayerBody(
                 context = context,
                 videoId = videoId,
+                cpn = generateCpn(),
                 playbackContext = if (clientType.useSignatureTimestamp) {
                     PlayerBody.PlaybackContext(
                         PlayerBody.PlaybackContext.ContentPlaybackContext(

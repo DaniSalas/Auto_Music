@@ -35,7 +35,6 @@ data class InnerTubeClient(
     val referer: String? = null,
     val osName: String? = null,
     val osVersion: String? = null,
-    val platform: String? = null,
     val androidSdkVersion: Int? = null,
     val deviceMake: String? = null,
     val deviceModel: String? = null
@@ -46,6 +45,7 @@ data class PlayerBody(
     val context: InnerTubeContext,
     val videoId: String,
     val playlistId: String? = null,
+    val cpn: String? = null,
     val playbackContext: PlaybackContext? = null
 ) {
     @Serializable

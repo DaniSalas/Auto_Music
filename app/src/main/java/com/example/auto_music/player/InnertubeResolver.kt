@@ -9,7 +9,6 @@ import android.util.Log
 object InnertubeResolver {
     private const val TAG = "InnertubeResolver"
     private val cachedUrls = mutableMapOf<String, Pair<ResolvedStream, Long>>()
-    private val skippedValidationIds = mutableSetOf<String>()
 
     data class ResolvedStream(
         val url: String,
@@ -29,126 +28,44 @@ object InnertubeResolver {
             }
         }
 
-        // Try WEB_REMIX first (Main client)
-        Log.i(TAG, "Resolving $videoId with WEB_REMIX")
-        val webRemixResponse = try {
-            Innertube.player(videoId, YouTubeClient.WEB_REMIX)
-        } catch (e: Exception) {
-            Log.e(TAG, "Error calling Innertube.player (WEB_REMIX)", e)
-            null
-        }
-        
-        // Handle age restriction early
-        val status = webRemixResponse?.playabilityStatus?.status
-        if (status in listOf("AGE_CHECK_REQUIRED", "AGE_VERIFICATION_REQUIRED", "LOGIN_REQUIRED", "CONTENT_CHECK_REQUIRED")) {
-            Log.i(TAG, "Age restriction detected ($status), trying WEB_CREATOR")
-            val creatorResponse = try {
-                Innertube.player(videoId, YouTubeClient.WEB_CREATOR)
-            } catch (e: Exception) { null }
-            
-            val creatorUrl = extractUrl(creatorResponse)
-            if (creatorUrl != null) {
-                val stream = ResolvedStream(creatorUrl, YouTubeClient.WEB_CREATOR.userAgent)
-                cacheStream(videoId, stream, creatorResponse?.streamingData?.expiresInSeconds)
-                return stream
-            }
-        }
+        // List of clients to try in order of reliability for streaming without complex JS transforms
+        val clients = listOf(
+            YouTubeClient.VISIONOS,
+            YouTubeClient.ANDROID_VR,
+            YouTubeClient.TVHTML5_EMBEDDED,
+            YouTubeClient.ANDROID_MUSIC,
+            YouTubeClient.IOS,
+            YouTubeClient.WEB_REMIX,
+            YouTubeClient.MWEB
+        )
 
-        val webRemixUrl = extractUrl(webRemixResponse)
-        if (webRemixUrl != null) {
-            // WEB_REMIX often fails HEAD but works on GET. Skip HEAD validation once per videoId.
-            if (!skippedValidationIds.contains(videoId)) {
-                Log.d(TAG, "WEB_REMIX — skipping HEAD validation for $videoId")
-                skippedValidationIds.add(videoId)
-                val stream = ResolvedStream(webRemixUrl, YouTubeClient.WEB_REMIX.userAgent)
-                cacheStream(videoId, stream, webRemixResponse?.streamingData?.expiresInSeconds)
-                return stream
+        for (client in clients) {
+            Log.i(TAG, "Resolving $videoId with ${client.clientName}")
+            val response = try {
+                Innertube.player(videoId, client)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error calling Innertube.player (${client.clientName})", e)
+                null
             }
 
-            Log.d(TAG, "Testing WEB_REMIX URL...")
-            if (validateUrl(webRemixUrl, YouTubeClient.WEB_REMIX.userAgent)) {
-                Log.i(TAG, "WEB_REMIX URL is valid")
-                val stream = ResolvedStream(webRemixUrl, YouTubeClient.WEB_REMIX.userAgent)
-                cacheStream(videoId, stream, webRemixResponse?.streamingData?.expiresInSeconds)
-                return stream
-            } else {
-                Log.w(TAG, "WEB_REMIX URL validation failed")
+            val status = response?.playabilityStatus?.status
+            if (status != "OK") {
+                Log.w(TAG, "Status $status for client ${client.clientName}: ${response?.playabilityStatus?.reason}")
+                continue
             }
-        }
 
-        // Try VISIONOS (Most reliable fallback)
-        Log.i(TAG, "Fallback: Resolving $videoId with VISIONOS")
-        val visionResponse = try {
-            Innertube.player(videoId, YouTubeClient.VISIONOS)
-        } catch (e: Exception) {
-            Log.e(TAG, "Error calling Innertube.player (VISIONOS)", e)
-            null
-        }
-        val visionUrl = extractUrl(visionResponse)
-        if (visionUrl != null) {
-            val stream = ResolvedStream(visionUrl, YouTubeClient.VISIONOS.userAgent)
-            cacheStream(videoId, stream, visionResponse?.streamingData?.expiresInSeconds)
-            return stream
-        }
-
-        // Try IOS
-        Log.i(TAG, "Fallback: Resolving $videoId with IOS")
-        val iosResponse = try {
-            Innertube.player(videoId, YouTubeClient.IOS)
-        } catch (e: Exception) {
-            Log.e(TAG, "Error calling Innertube.player (IOS)", e)
-            null
-        }
-        val iosUrl = extractUrl(iosResponse)
-        if (iosUrl != null) {
-            val stream = ResolvedStream(iosUrl, YouTubeClient.IOS.userAgent)
-            cacheStream(videoId, stream, iosResponse?.streamingData?.expiresInSeconds)
-            return stream
-        }
-
-        // Try ANDROID_MUSIC
-        Log.i(TAG, "Fallback: Resolving $videoId with ANDROID_MUSIC")
-        val androidMusicResponse = try {
-            Innertube.player(videoId, YouTubeClient.ANDROID_MUSIC)
-        } catch (e: Exception) {
-            Log.e(TAG, "Error calling Innertube.player (ANDROID_MUSIC)", e)
-            null
-        }
-        val androidMusicUrl = extractUrl(androidMusicResponse)
-        if (androidMusicUrl != null) {
-            val stream = ResolvedStream(androidMusicUrl, YouTubeClient.ANDROID_MUSIC.userAgent)
-            cacheStream(videoId, stream, androidMusicResponse?.streamingData?.expiresInSeconds)
-            return stream
-        }
-
-        // Try MWEB
-        Log.i(TAG, "Fallback: Resolving $videoId with MWEB")
-        val mwebResponse = try {
-            Innertube.player(videoId, YouTubeClient.MWEB)
-        } catch (e: Exception) {
-            Log.e(TAG, "Error calling Innertube.player (MWEB)", e)
-            null
-        }
-        val mwebUrl = extractUrl(mwebResponse)
-        if (mwebUrl != null) {
-            val stream = ResolvedStream(mwebUrl, YouTubeClient.MWEB.userAgent)
-            cacheStream(videoId, stream, mwebResponse?.streamingData?.expiresInSeconds)
-            return stream
-        }
-
-        // Try ANDROID_VR
-        Log.i(TAG, "Fallback: Resolving $videoId with ANDROID_VR")
-        val androidVrResponse = try {
-            Innertube.player(videoId, YouTubeClient.ANDROID_VR)
-        } catch (e: Exception) {
-            Log.e(TAG, "Error calling Innertube.player (ANDROID_VR)", e)
-            null
-        }
-        val androidVrUrl = extractUrl(androidVrResponse)
-        if (androidVrUrl != null) {
-            val stream = ResolvedStream(androidVrUrl, YouTubeClient.ANDROID_VR.userAgent)
-            cacheStream(videoId, stream, androidVrResponse?.streamingData?.expiresInSeconds)
-            return stream
+            val url = extractUrl(response)
+            if (url != null) {
+                // Testing URL validity with Ktor using the client's User-Agent
+                if (validateUrl(url, client.userAgent)) {
+                    Log.i(TAG, "Successfully resolved $videoId with ${client.clientName}")
+                    val stream = ResolvedStream(url, client.userAgent)
+                    cacheStream(videoId, stream, response?.streamingData?.expiresInSeconds)
+                    return stream
+                } else {
+                    Log.w(TAG, "Validation failed for ${client.clientName} URL (might require n-transform or different headers)")
+                }
+            }
         }
 
         Log.e(TAG, "Failed to resolve any playable URL for $videoId")
@@ -156,46 +73,47 @@ object InnertubeResolver {
     }
 
     private fun extractUrl(response: com.example.auto_music.data.remote.model.PlayerResponse?): String? {
-        if (response == null) {
-            Log.e(TAG, "Response is null")
-            return null
-        }
-        if (response.playabilityStatus != null && response.playabilityStatus.status != "OK") {
-            Log.e(TAG, "Playability status not OK: ${response.playabilityStatus.status} - ${response.playabilityStatus.reason}")
-            return null
-        }
+        if (response == null) return null
         
-        val streamingData = response.streamingData
-        if (streamingData == null) {
-            Log.e(TAG, "StreamingData is null")
-            return null
-        }
-        
+        val streamingData = response.streamingData ?: return null
         val formats = (streamingData.adaptiveFormats ?: emptyList()) + (streamingData.formats ?: emptyList())
-        if (formats.isEmpty()) {
-            Log.e(TAG, "No formats found in response")
-            return null
-        }
+        if (formats.isEmpty()) return null
 
-        Log.i(TAG, "Found ${formats.size} formats. Filtering for audio...")
-        
-        // Find best audio format
+        // Filter for audio formats
         val audioFormats = formats.filter { it.isAudio }
-        Log.i(TAG, "Found ${audioFormats.size} audio formats")
-
-        val audioFormat = audioFormats.maxByOrNull { it.bitrate } ?: audioFormats.firstOrNull() ?: formats.firstOrNull()
+        
+        // Strategy: 
+        // 1. Prefer formats with a direct 'url' (no signatureCipher)
+        // 2. Prefer opus (itag 251, 250, 249) then mp4a (itag 140, 139)
+        val preferredItags = listOf(251, 140, 250, 139, 249)
+        
+        // Try to find a preferred itag with a direct URL first
+        var audioFormat = preferredItags.firstNotNullOfOrNull { itag ->
+            audioFormats.find { it.itag == itag && it.url != null }
+        }
+        
+        // Fallback to any itag with a direct URL
+        if (audioFormat == null) {
+            audioFormat = audioFormats.filter { it.url != null }.maxByOrNull { it.bitrate ?: 0 }
+        }
+        
+        // If still null, we have to try signatureCipher (which might fail without JS transform)
+        if (audioFormat == null) {
+            audioFormat = preferredItags.firstNotNullOfOrNull { itag ->
+                audioFormats.find { it.itag == itag }
+            } ?: audioFormats.maxByOrNull { it.bitrate ?: 0 } ?: formats.firstOrNull()
+        }
             
         var url = audioFormat?.url
         
         if (url == null && audioFormat?.signatureCipher != null) {
-            Log.i(TAG, "Found signatureCipher for format ${audioFormat.itag}. Attempting to extract URL.")
+            Log.d(TAG, "Format ${audioFormat.itag} has signatureCipher, attempting basic decode")
             url = decodeSignatureCipher(audioFormat.signatureCipher)
         } else if (url == null && audioFormat?.cipher != null) {
-            Log.i(TAG, "Found cipher for format ${audioFormat.itag}. Attempting to extract URL.")
+            Log.d(TAG, "Format ${audioFormat.itag} has cipher, attempting basic decode")
             url = decodeSignatureCipher(audioFormat.cipher)
         }
         
-        Log.i(TAG, "Final extracted URL for itag ${audioFormat?.itag}: ${url?.take(100)}...")
         return url
     }
 
@@ -214,11 +132,10 @@ object InnertubeResolver {
             val sp = params["sp"] ?: "sig"
             
             if (baseUrl != null && signature != null) {
-                if (baseUrl.contains("?")) {
-                    "$baseUrl&$sp=$signature"
-                } else {
-                    "$baseUrl?$sp=$signature"
-                }
+                // NOTE: This basic decode often fails for modern YouTube because 's' requires 
+                // a JavaScript-based transformation.
+                val connector = if (baseUrl.contains("?")) "&" else "?"
+                "$baseUrl$connector$sp=$signature"
             } else {
                 baseUrl
             }
@@ -233,16 +150,19 @@ object InnertubeResolver {
              val response = Innertube.client.get(url) {
                  header("Range", "bytes=0-1")
                  header("User-Agent", userAgent)
-                 header("Referer", "https://music.youtube.com/")
-                 header("Origin", "https://music.youtube.com")
+                 // Web clients often need Referer/Origin
+                 if (userAgent.contains("Mozilla") && !userAgent.contains("Android") && !userAgent.contains("iPhone")) {
+                    header("Referer", "https://music.youtube.com/")
+                    header("Origin", "https://music.youtube.com")
+                 }
              }
              val isValid = response.status.value in 200..299 || response.status.value == 206
              if (!isValid) {
-                 Log.w(TAG, "URL validation failed with status ${response.status.value} for URL: ${url.take(100)}...")
+                 Log.w(TAG, "URL validation failed with status ${response.status.value}")
              }
              isValid
         } catch (e: Exception) {
-            Log.e(TAG, "URL validation failed for $url", e)
+            Log.e(TAG, "URL validation exception: ${e.message}")
             false
         }
     }

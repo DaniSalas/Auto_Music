@@ -12,7 +12,7 @@ data class PlayerResponse(
 ) {
     @Serializable
     data class PlayabilityStatus(
-        val status: String,
+        val status: String? = null,
         val reason: String? = null
     )
 
@@ -24,10 +24,10 @@ data class PlayerResponse(
     ) {
         @Serializable
         data class Format(
-            val itag: Int,
+            val itag: Int? = null,
             val url: String? = null,
-            val mimeType: String,
-            val bitrate: Int,
+            val mimeType: String? = null,
+            val bitrate: Int? = null,
             val width: Int? = null,
             val height: Int? = null,
             val contentLength: String? = null,
@@ -42,7 +42,7 @@ data class PlayerResponse(
 
     @Serializable
     data class VideoDetails(
-        val videoId: String,
+        val videoId: String? = null,
         val title: String? = null,
         val author: String? = null,
         val lengthSeconds: String? = null,
@@ -50,13 +50,13 @@ data class PlayerResponse(
     ) {
         @Serializable
         data class Thumbnails(
-            val thumbnails: List<Thumbnail>
+            val thumbnails: List<Thumbnail>? = null
         ) {
             @Serializable
             data class Thumbnail(
-                val url: String,
-                val width: Int,
-                val height: Int
+                val url: String? = null,
+                val width: Int? = null,
+                val height: Int? = null
             )
         }
     }

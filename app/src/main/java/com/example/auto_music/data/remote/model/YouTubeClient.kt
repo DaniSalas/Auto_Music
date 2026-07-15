@@ -34,14 +34,7 @@ data class YouTubeClient(
             osVersion = osVersion,
             deviceMake = deviceMake,
             deviceModel = deviceModel,
-            androidSdkVersion = androidSdkVersion,
-            platform = when (clientName) {
-                "WEB_REMIX" -> "DESKTOP"
-                "WEB" -> "DESKTOP"
-                "IOS", "VISIONOS" -> "IOS"
-                "ANDROID", "ANDROID_MUSIC", "ANDROID_VR" -> "ANDROID"
-                else -> null
-            }
+            androidSdkVersion = androidSdkVersion
         )
     )
 

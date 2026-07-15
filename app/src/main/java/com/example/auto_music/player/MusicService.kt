@@ -54,23 +54,15 @@ class MusicService : MediaLibraryService() {
     private fun createDataSourceFactory(): androidx.media3.datasource.DataSource.Factory {
         android.util.Log.d("MusicService", "Creant DataSourceFactory...")
         val httpDataSourceFactory = DefaultHttpDataSource.Factory()
-            .setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
-            .setDefaultRequestProperties(mapOf(
-                "Referer" to "https://music.youtube.com/",
-                "Origin" to "https://music.youtube.com"
-            ))
             .setAllowCrossProtocolRedirects(true)
 
         val defaultDataSourceFactory = androidx.media3.datasource.DefaultDataSource.Factory(this, httpDataSourceFactory)
 
         val resolvingDataSourceFactory = ResolvingDataSource.Factory(defaultDataSourceFactory) { dataSpec ->
             val uriString = dataSpec.uri.toString()
-            android.util.Log.d("MusicService", "ResolvingDataSource interceptant URI: $uriString")
-            android.util.Log.d("MusicService", "DataSpec details - key: ${dataSpec.key}, position: ${dataSpec.position}, length: ${dataSpec.length}")
             
             // Si és un fitxer local o ja és una URL de streaming, no fem res
             if (uriString.startsWith("file") || uriString.contains("googlevideo.com")) {
-                android.util.Log.d("MusicService", "URI ja resolta o local, saltant resolució")
                 return@Factory dataSpec
             }
 
@@ -78,26 +70,36 @@ class MusicService : MediaLibraryService() {
             val videoId = dataSpec.key ?: uriString.substringAfter("v=", "").substringBefore("&")
             
             if (videoId.isEmpty()) {
-                android.util.Log.w("MusicService", "No s'ha pogut extreure videoId de $uriString")
                 return@Factory dataSpec
             }
 
-            android.util.Log.i("MusicService", "Resolent stream per a videoId: $videoId")
+            android.util.Log.i("MusicService", "Resolving stream for $videoId")
             val stream = try {
                 runBlocking(Dispatchers.IO) {
                     InnertubeResolver.resolveStream(videoId)
                 }
             } catch (e: Exception) {
-                android.util.Log.e("MusicService", "Error fatal en runBlocking per a $videoId", e)
+                android.util.Log.e("MusicService", "Error resolving $videoId", e)
                 null
             }
             
             if (stream != null) {
-                android.util.Log.d("MusicService", "URL resolta correctament per a $videoId")
+                android.util.Log.d("MusicService", "Resolved URL for $videoId")
+                val headers = dataSpec.httpRequestHeaders.toMutableMap()
+                headers["User-Agent"] = stream.userAgent
+                
+                // Add Referer for web agents, but avoid it for mobile agents as it can cause 403s
+                if (stream.userAgent.contains("Mozilla") && 
+                    !stream.userAgent.contains("Android") && 
+                    !stream.userAgent.contains("iPhone") &&
+                    !stream.userAgent.contains("com.google.android")) {
+                    headers["Referer"] = "https://music.youtube.com/"
+                }
+
                 return@Factory dataSpec.withUri(android.net.Uri.parse(stream.url))
+                    .withRequestHeaders(headers)
             }
 
-            android.util.Log.e("MusicService", "Resolució fallida per a $videoId")
             dataSpec
         }
 

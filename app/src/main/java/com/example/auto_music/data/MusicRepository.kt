@@ -115,6 +115,10 @@ class MusicRepository(
         }
     }
 
+    suspend fun getSongById(songId: String): Song? {
+        return musicDao.getSongById(songId)
+    }
+
     suspend fun createPlaylist(name: String) {
         musicDao.insertPlaylist(Playlist(name = name))
     }

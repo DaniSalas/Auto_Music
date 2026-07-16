@@ -6,11 +6,13 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.net.Uri
+import android.os.Bundle
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.ResolvingDataSource
@@ -22,6 +24,8 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
+import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionResult
 import com.example.auto_music.data.MusicRepository
 import com.example.auto_music.data.local.MusicDatabase
 import com.example.auto_music.data.remote.YouTubeService
@@ -54,7 +58,6 @@ class MusicService : MediaLibraryService() {
     private lateinit var cache: SimpleCache
 
     private fun createDataSourceFactory(): androidx.media3.datasource.DataSource.Factory {
-        android.util.Log.d("MusicService", "Creant DataSourceFactory...")
         val httpDataSourceFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
 
@@ -73,18 +76,15 @@ class MusicService : MediaLibraryService() {
                 return@Factory dataSpec
             }
 
-            android.util.Log.i("MusicService", "Resolving stream for $videoId")
             val stream = try {
                 runBlocking(Dispatchers.IO) {
                     InnertubeResolver.resolveStream(videoId)
                 }
             } catch (e: Exception) {
-                android.util.Log.e("MusicService", "Error resolving $videoId", e)
                 null
             }
             
             if (stream != null) {
-                android.util.Log.d("MusicService", "Resolved URL for $videoId")
                 val headers = dataSpec.httpRequestHeaders.toMutableMap()
                 headers["User-Agent"] = stream.userAgent
                 
@@ -139,7 +139,6 @@ class MusicService : MediaLibraryService() {
                             filePath?.let { path ->
                                 serviceScope.launch {
                                     repository.updateSongDownloadStatus(songId, path)
-                                    android.util.Log.d("MusicService", "Descàrrega completada per a $songId a $path")
                                 }
                             }
                         }
@@ -189,14 +188,9 @@ class MusicService : MediaLibraryService() {
             .setAudioAttributes(audioAttributes, true)
             .setHandleAudioBecomingNoisy(true)
             .setWakeMode(C.WAKE_MODE_NETWORK)
+            .setSeekForwardIncrementMs(30000)
+            .setSeekBackIncrementMs(10000)
             .build()
-            .apply {
-                addListener(object : androidx.media3.common.Player.Listener {
-                    override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                        android.util.Log.e("MusicService", "Error de reproducció (${error.errorCodeName}): ${error.message}", error)
-                    }
-                })
-            }
 
         mediaSession = MediaLibrarySession.Builder(this, player, LibrarySessionCallback()).build()
         
@@ -213,6 +207,25 @@ class MusicService : MediaLibraryService() {
     }
 
     private inner class LibrarySessionCallback : MediaLibrarySession.Callback {
+        
+        override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
+            val connectionResult = super.onConnect(session, controller)
+            val availableSessionCommands = connectionResult.availableSessionCommands.buildUpon()
+            
+            // Ensure all basic commands are available for Android Auto
+            val availablePlayerCommands = connectionResult.availablePlayerCommands.buildUpon()
+                .add(Player.COMMAND_SEEK_TO_NEXT)
+                .add(Player.COMMAND_SEEK_TO_PREVIOUS)
+                .add(Player.COMMAND_SEEK_FORWARD)
+                .add(Player.COMMAND_SEEK_BACK)
+                .add(Player.COMMAND_PLAY_PAUSE)
+                .add(Player.COMMAND_STOP)
+                .add(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)
+                .build()
+
+            return MediaSession.ConnectionResult.accept(availableSessionCommands.build(), availablePlayerCommands)
+        }
+
         override fun onAddMediaItems(
             mediaSession: MediaSession,
             controller: MediaSession.ControllerInfo,
@@ -221,37 +234,65 @@ class MusicService : MediaLibraryService() {
             val future = SettableFuture.create<MutableList<MediaItem>>()
             
             serviceScope.launch {
-                val updatedItems = mediaItems.map { item ->
+                val updatedItems = mutableListOf<MediaItem>()
+                
+                for (item in mediaItems) {
                     val songId = item.mediaId
-                    if (songId.length > 5 && !songId.startsWith("PLAYLIST_") && songId != "ROOT") {
-                        // Intentem trobar la cançó a la DB per veure si està descarregada
-                        val song = repository.allSongs.first().find { it.id == songId }
-                        val localUri = if (song?.isDownloaded == true && song.audioUrl != null) {
-                            val file = File(song.audioUrl)
-                            if (file.exists()) {
-                                Uri.fromFile(file).toString()
-                            } else null
-                        } else null
+                    val playlistId = item.mediaMetadata.extras?.getString("playlistId")?.toLongOrNull()
 
-                        val finalUri = localUri ?: "https://music.youtube.com/watch?v=$songId"
+                    if (playlistId != null && mediaItems.size == 1) {
+                        val playlistSongs = repository.getSongsInPlaylist(playlistId).first()
+                        val startIndex = playlistSongs.indexOfFirst { it.id == songId }.coerceAtLeast(0)
                         
-                        item.buildUpon()
-                            .setUri(finalUri)
-                            .setCustomCacheKey(songId)
-                            .setMimeType("audio/mpeg")
-                            .setMediaMetadata(item.mediaMetadata.buildUpon()
-                                .setIsPlayable(true)
-                                .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
-                                .build())
-                            .build()
+                        // Rotar para empezar en la canción seleccionada pero tener las demás en cola
+                        val rotatedList = playlistSongs.drop(startIndex) + playlistSongs.take(startIndex)
+                        rotatedList.forEach { updatedItems.add(createMediaItem(it)) }
+                    } else if (songId.length > 5 && !songId.startsWith("PLAYLIST_") && songId != "ROOT") {
+                        val song = repository.getSongById(songId)
+                        if (song != null) {
+                            updatedItems.add(createMediaItem(song))
+                        } else {
+                            updatedItems.add(item)
+                        }
                     } else {
-                        item
+                        updatedItems.add(item)
                     }
-                }.toMutableList()
+                }
                 future.set(updatedItems)
             }
             
             return future
+        }
+
+        private fun createMediaItem(song: com.example.auto_music.model.Song): MediaItem {
+            val localUri = if (song.isDownloaded && song.audioUrl != null) {
+                val file = File(song.audioUrl)
+                if (file.exists()) Uri.fromFile(file).toString() else null
+            } else null
+
+            val finalUri = localUri ?: "https://music.youtube.com/watch?v=${song.id}"
+            
+            val extras = Bundle()
+            // Android Auto duration metadata
+            extras.putLong("android.media.metadata.DURATION", song.duration * 1000L)
+            
+            return MediaItem.Builder()
+                .setMediaId(song.id)
+                .setUri(finalUri)
+                .setCustomCacheKey(song.id)
+                .setMimeType("audio/mpeg")
+                .setMediaMetadata(
+                    MediaMetadata.Builder()
+                        .setTitle(song.title)
+                        .setArtist(song.artist)
+                        .setArtworkUri(song.thumbnailUrl.toUri())
+                        .setIsBrowsable(false)
+                        .setIsPlayable(true)
+                        .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
+                        .setExtras(extras)
+                        .build()
+                )
+                .build()
         }
 
         override fun onGetLibraryRoot(
@@ -263,6 +304,7 @@ class MusicService : MediaLibraryService() {
                 .setMediaId("ROOT")
                 .setMediaMetadata(
                     MediaMetadata.Builder()
+                        .setTitle("Auto Music")
                         .setIsBrowsable(true)
                         .setIsPlayable(false)
                         .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
@@ -306,13 +348,15 @@ class MusicService : MediaLibraryService() {
                     val items = songs.map { song ->
                         val localUri = if (song.isDownloaded && song.audioUrl != null) {
                             val file = File(song.audioUrl)
-                            if (file.exists()) {
-                                Uri.fromFile(file).toString()
-                            } else null
+                            if (file.exists()) Uri.fromFile(file).toString() else null
                         } else null
 
                         val finalUri = localUri ?: "https://music.youtube.com/watch?v=${song.id}"
                         
+                        val extras = Bundle()
+                        extras.putString("playlistId", playlistId.toString())
+                        extras.putLong("android.media.metadata.DURATION", song.duration * 1000L)
+
                         MediaItem.Builder()
                             .setMediaId(song.id)
                             .setUri(finalUri)
@@ -325,6 +369,7 @@ class MusicService : MediaLibraryService() {
                                     .setIsBrowsable(false)
                                     .setIsPlayable(true)
                                     .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
+                                    .setExtras(extras)
                                     .build()
                             )
                             .build()

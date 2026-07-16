@@ -470,52 +470,52 @@ fun getTranslations(lang: String): AppTranslations {
     return when (lang) {
         "ENGLISH" -> AppTranslations(
             "Search", "Playlists", "Language", "Configuration", "Donation",
-            "If you liked my application you can donate the amount you consider by doing a bizzum to +34655533304",
+            "If you liked my application you can donate the amount you consider.",
             "Select background color", "Close", "Brightness", "Preview", "Dark Mode", "Custom color is disabled in Dark Mode"
         )
         "CATALA" -> AppTranslations(
             "Cerca", "Llistes", "Idioma", "Configuració", "Donació",
-            "Si t'ha agradat la meva aplicació pots donar per Bizzum al +34655533304",
+            "Si t'ha agradat la meva aplicació pots fer una donació amb l'import que consideris.",
             "Selecciona el color de fons", "Tancar", "Brillantor", "Vista prèvia", "Mode fosc", "El color personalitzat es desactiva en mode fosc"
         )
         "GALEGO" -> AppTranslations(
             "Cerca", "Listas", "Lingua", "Configuración", "Doazón",
-            "Se che gustou a miña aplicación podes doar por Bizzum ao +34655533304",
+            "Se che gustou a miña aplicación podes doar o importe que consideres.",
             "Selecciona a cor de fondo", "Pechar", "Brillo", "Vista previa", "Modo escuro", "A cor personalizada desactívase no modo escuro"
         )
         "EUSKARA" -> AppTranslations(
             "Bilatu", "Zerrendak", "Hizkuntza", "Konfigurazioa", "Dohaintza",
-            "Nire aplikazioa gustatu bazaizu, bizzum bat egin dezakezu +34655533304 zenbakira",
+            "Nire aplikazioa gustatu bazaizu, nahi duzun zenbatekoa eman dezakezu.",
             "Hautatu atzeko planoko kolorea", "Itxi", "Distira", "Aurreikuspena", "Modu iluna", "Kolore pertsonalizatua desgaituta dago modu ilunean"
         )
         "FRANCAIS" -> AppTranslations(
             "Recherche", "Listes", "Langue", "Configuration", "Don",
-            "Si vous avez aimé mon application, vous pouvez faire un bizzum au +34655533304",
+            "Si vous avez aimé mon application, vous pouvez donner le montant que vous considérez.",
             "Sélectionnez la couleur de fond", "Fermer", "Luminosité", "Aperçu", "Mode sombre", "La couleur personnalisée est désactivée en mode sombre"
         )
         "DEUTSCH" -> AppTranslations(
             "Suche", "Listen", "Sprache", "Konfiguration", "Spende",
-            "Wenn Ihnen meine App gefallen hat, können Sie ein Bizzum an +34655533304 senden",
+            "Wenn Ihnen meine App gefallen hat, können Sie den von Ihnen gewünschten Betrag spenden.",
             "Hintergrundfarbe auswählen", "Schließen", "Helligkeit", "Vorschau", "Dunkelmodus", "Benutzerdefinierte Farbe ist im Dunkelmodus deaktiviert"
         )
         "ITALIANO" -> AppTranslations(
             "Cerca", "Liste", "Lingua", "Configurazione", "Donazione",
-            "Se ti è piaciuta la mia app, puoi fare un bizzum al +34655533304",
-            "Seleziona il colore dello sfondo", "Chiudi", "Luminosità", "Anteprima", "Modalità scura", "Il colore personalizzato è disabilitato in modalità scura"
+            "Se ti è piaciuta la mia app, puoi donare l'importo che consideri.",
+            "Seleziona il colore dello sfondo", "Chiudi", "Luminosità", "Anteprima", "Modalità scura", "Il colore personalizado è disabilitato in modalità scura"
         )
         "KOREAN" -> AppTranslations(
             "검색", "재생 목록", "언어", "설정", "기부",
-            "내 애플리케이션이 마음에 들면 +34655533304로 bizzum을 수행하여 고려하는 금액을 기부할 수 있습니다.",
+            "내 애플리케이션이 마음에 들면 원하는 금액을 기부할 수 있습니다.",
             "배경색 선택", "닫기", "밝기", "미리보기", "다크 모드", "다크 모드에서는 사용자 정의 색상이 비활성화됩니다."
         )
         "JAPANESE" -> AppTranslations(
             "検索", "プレイリスト", "言語", "設定", "寄付",
-            "私のアプリケーションが気に入ったら、+34655533304にbizzumを行うことで、検討している金額を寄付できます。",
+            "私のアプリケーションが気に入ったら、検討している金額を寄付できます。",
             "背景色を選択", "閉じる", "明るさ", "プレビュー", "ダークモード", "ダークモードではカスタムカラーが無効になります"
         )
         else -> AppTranslations( // ESPANOL
             "Buscar", "Listas", "Idioma", "Configuración", "Donación",
-            "Si te gustó mi aplicación puedes donar la cantidad que consideres haciendo un bizzum al +34655533304",
+            "Si te gustó mi aplicación puedes donar la cantidad que consideres.",
             "Selecciona el color de fondo", "Cerrar", "Brillo", "Vista previa", "Modo oscuro", "El color personalizado se desactiva en modo oscuro"
         )
     }

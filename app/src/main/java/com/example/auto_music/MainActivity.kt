@@ -29,6 +29,9 @@ import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
+import androidx.activity.result.contract.ActivityResultContracts
+import android.Manifest
+import android.os.Build
 import com.example.auto_music.data.MusicRepository
 import com.example.auto_music.data.local.MusicDatabase
 import com.example.auto_music.data.remote.YouTubeService
@@ -49,9 +52,27 @@ import androidx.media3.common.util.UnstableApi
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+    private val requestPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val granted = permissions.entries.all { it.value }
+        if (granted) {
+            android.util.Log.d("MainActivity", "Permissions granted")
+        } else {
+            android.util.Log.e("MainActivity", "Permissions denied")
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            arrayOf(Manifest.permission.READ_MEDIA_AUDIO, Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+        requestPermissionLauncher.launch(permissions)
         
         val database = MusicDatabase.getDatabase(applicationContext)
 

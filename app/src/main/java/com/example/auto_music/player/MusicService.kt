@@ -40,6 +40,7 @@ import okhttp3.OkHttpClient
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import java.util.concurrent.TimeUnit
+import androidx.core.net.toUri
 
 @UnstableApi
 class MusicService : MediaLibraryService() {
@@ -61,12 +62,10 @@ class MusicService : MediaLibraryService() {
         val resolvingDataSourceFactory = ResolvingDataSource.Factory(defaultDataSourceFactory) { dataSpec ->
             val uriString = dataSpec.uri.toString()
             
-            // Si és un fitxer local o ja és una URL de streaming, no fem res
             if (uriString.startsWith("file") || uriString.contains("googlevideo.com")) {
                 return@Factory dataSpec
             }
 
-            // Intentem obtenir el videoId de la key o de la URL
             val videoId = dataSpec.key ?: uriString.substringAfter("v=", "").substringBefore("&")
             
             if (videoId.isEmpty()) {
@@ -84,11 +83,10 @@ class MusicService : MediaLibraryService() {
             }
             
             if (stream != null) {
-                android.util.Log.d("MusicService", "Resolved URL for $videoId")
+                android.util.Log.d("MusicService", "Resolved URL for $videoId: ${stream.url.take(50)}...")
                 val headers = dataSpec.httpRequestHeaders.toMutableMap()
                 headers["User-Agent"] = stream.userAgent
                 
-                // Add Referer for web agents, but avoid it for mobile agents as it can cause 403s
                 if (stream.userAgent.contains("Mozilla") && 
                     !stream.userAgent.contains("Android") && 
                     !stream.userAgent.contains("iPhone") &&
@@ -98,6 +96,8 @@ class MusicService : MediaLibraryService() {
 
                 return@Factory dataSpec.withUri(android.net.Uri.parse(stream.url))
                     .withRequestHeaders(headers)
+            } else {
+                android.util.Log.e("MusicService", "Failed to resolve stream for $videoId. Playback will likely fail.")
             }
 
             dataSpec
@@ -195,34 +195,9 @@ class MusicService : MediaLibraryService() {
                 addListener(object : androidx.media3.common.Player.Listener {
                     override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                         android.util.Log.e("MusicService", "Error de reproducció (${error.errorCodeName}): ${error.message}", error)
-                        if (error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS) {
-                            android.util.Log.e("MusicService", "Error HTTP detectat. Podria ser un 403 o 404.")
-                        }
                     }
                     override fun onPlaybackStateChanged(playbackState: Int) {
-                        val stateStr = when(playbackState) {
-                            ExoPlayer.STATE_IDLE -> "IDLE"
-                            ExoPlayer.STATE_BUFFERING -> "BUFFERING"
-                            ExoPlayer.STATE_READY -> "READY"
-                            ExoPlayer.STATE_ENDED -> "ENDED"
-                            else -> "UNKNOWN"
-                        }
-                        android.util.Log.d("MusicService", "Estat del reproductor: $stateStr")
-                    }
-                    override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                        android.util.Log.d("MusicService", "Transició a MediaItem: ${mediaItem?.mediaMetadata?.title} (ID: ${mediaItem?.mediaId}, URI: ${mediaItem?.localConfiguration?.uri})")
-                    }
-                    override fun onPositionDiscontinuity(
-                        oldPosition: androidx.media3.common.Player.PositionInfo,
-                        newPosition: androidx.media3.common.Player.PositionInfo,
-                        reason: Int
-                    ) {
-                        android.util.Log.d("MusicService", "Discontinuïtat de posició: raó=$reason")
-                    }
-                    override fun onEvents(player: androidx.media3.common.Player, events: androidx.media3.common.Player.Events) {
-                        if (events.contains(androidx.media3.common.Player.EVENT_PLAYBACK_STATE_CHANGED)) {
-                            android.util.Log.d("MusicService", "Event: Playback State Changed a ${player.playbackState}")
-                        }
+                        android.util.Log.d("MusicService", "Playback state: $playbackState")
                     }
                 })
             }
@@ -247,14 +222,14 @@ class MusicService : MediaLibraryService() {
             controller: MediaSession.ControllerInfo,
             mediaItems: MutableList<MediaItem>
         ): ListenableFuture<MutableList<MediaItem>> {
-            android.util.Log.d("MusicService", "onAddMediaItems rebuda per a ${mediaItems.size} items")
             val updatedItems = mediaItems.map { item ->
-                android.util.Log.d("MusicService", "Processant item: ${item.mediaId}, URI: ${item.localConfiguration?.uri}")
-                if (item.localConfiguration?.uri == null && !item.mediaId.startsWith("PLAYLIST_") && item.mediaId != "ROOT") {
-                    // Si no té URI, potser hem de restaurar-la si la hem perdut en el transport
-                    android.util.Log.w("MusicService", "Item sense URI, restaurant per defecte per a ${item.mediaId}")
+                if (item.localConfiguration?.uri == null && item.mediaId.length > 5 && !item.mediaId.startsWith("PLAYLIST_") && item.mediaId != "ROOT") {
+                    val songId = item.mediaId
+                    val uri = "https://music.youtube.com/watch?v=$songId"
+                    
                     item.buildUpon()
-                        .setUri("https://music.youtube.com/watch?v=${item.mediaId}")
+                        .setUri(uri)
+                        .setCustomCacheKey(songId)
                         .setMimeType("audio/mpeg")
                         .build()
                 } else {
@@ -275,6 +250,7 @@ class MusicService : MediaLibraryService() {
                     MediaMetadata.Builder()
                         .setIsBrowsable(true)
                         .setIsPlayable(false)
+                        .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
                         .build()
                 )
                 .build()
@@ -301,6 +277,7 @@ class MusicService : MediaLibraryService() {
                                     .setTitle(playlist.name)
                                     .setIsBrowsable(true)
                                     .setIsPlayable(false)
+                                    .setMediaType(MediaMetadata.MEDIA_TYPE_PLAYLIST)
                                     .build()
                             )
                             .build()
@@ -326,8 +303,10 @@ class MusicService : MediaLibraryService() {
                                 MediaMetadata.Builder()
                                     .setTitle(song.title)
                                     .setArtist(song.artist)
+                                    .setArtworkUri(song.thumbnailUrl.toUri())
                                     .setIsBrowsable(false)
                                     .setIsPlayable(true)
+                                    .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
                                     .build()
                             )
                             .build()

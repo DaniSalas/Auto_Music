@@ -164,5 +164,14 @@ data class YouTubeClient(
             userAgent = "com.google.android.apps.youtube.vr.oculus/1.61.48 (Linux; U; Android 12; en_US; Quest 3; Build/SQ3A.220605.009.A1; Cronet/132.0.6808.3)",
             useSignatureTimestamp = true
         )
+
+        val ANDROID_TESTSUITE = YouTubeClient(
+            clientName = "ANDROID_TESTSUITE",
+            clientVersion = "1.9",
+            clientId = "30",
+            apiKey = KEY_ANDROID,
+            userAgent = "com.google.android.youtube/21.03.38 (Linux; U; Android 14) gzip",
+            useSignatureTimestamp = false
+        )
     }
 }

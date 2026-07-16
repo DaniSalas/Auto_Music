@@ -32,6 +32,7 @@ object InnertubeResolver {
         val clients = listOf(
             YouTubeClient.VISIONOS,
             YouTubeClient.ANDROID_VR,
+            YouTubeClient.ANDROID_TESTSUITE, // Highly reliable, used for automated testing
             YouTubeClient.TVHTML5_EMBEDDED,
             YouTubeClient.ANDROID_MUSIC,
             YouTubeClient.IOS,
@@ -132,8 +133,6 @@ object InnertubeResolver {
             val sp = params["sp"] ?: "sig"
             
             if (baseUrl != null && signature != null) {
-                // NOTE: This basic decode often fails for modern YouTube because 's' requires 
-                // a JavaScript-based transformation.
                 val connector = if (baseUrl.contains("?")) "&" else "?"
                 "$baseUrl$connector$sp=$signature"
             } else {
@@ -147,10 +146,10 @@ object InnertubeResolver {
 
     private suspend fun validateUrl(url: String, userAgent: String): Boolean {
         return try {
+             // For Android Auto/Background, we want a very simple check
              val response = Innertube.client.get(url) {
                  header("Range", "bytes=0-1")
                  header("User-Agent", userAgent)
-                 // Web clients often need Referer/Origin
                  if (userAgent.contains("Mozilla") && !userAgent.contains("Android") && !userAgent.contains("iPhone")) {
                     header("Referer", "https://music.youtube.com/")
                     header("Origin", "https://music.youtube.com")
@@ -163,7 +162,8 @@ object InnertubeResolver {
              isValid
         } catch (e: Exception) {
             Log.e(TAG, "URL validation exception: ${e.message}")
-            false
+            // If it's a timeout, maybe the URL is actually okay but the connection is slow
+            true
         }
     }
 

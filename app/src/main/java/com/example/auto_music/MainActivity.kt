@@ -29,9 +29,6 @@ import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
-import androidx.activity.result.contract.ActivityResultContracts
-import android.Manifest
-import android.os.Build
 import com.example.auto_music.data.MusicRepository
 import com.example.auto_music.data.local.MusicDatabase
 import com.example.auto_music.data.remote.YouTubeService
@@ -50,6 +47,10 @@ import androidx.compose.ui.platform.LocalContext
 import kotlin.OptIn
 import androidx.media3.common.util.UnstableApi
 import kotlinx.coroutines.launch
+import androidx.activity.result.contract.ActivityResultContracts
+import android.Manifest
+import android.os.Build
+import com.example.auto_music.sync.SyncManager
 
 class MainActivity : ComponentActivity() {
     private val requestPermissionLauncher = registerForActivityResult(
@@ -89,6 +90,7 @@ class MainActivity : ComponentActivity() {
             
         val youtubeService = retrofit.create(YouTubeService::class.java)
         val repository = MusicRepository(database.musicDao(), youtubeService, applicationContext)
+        val syncManager = SyncManager(applicationContext, repository)
 
         setContent {
             val context = LocalContext.current
@@ -118,17 +120,6 @@ class MainActivity : ComponentActivity() {
                     controllerFuture.addListener({
                         try {
                             val newController = controllerFuture.get()
-                            newController.addListener(object : androidx.media3.common.Player.Listener {
-                                override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                                    android.util.Log.e("MainActivity", "Controller Player Error: ${error.message}", error)
-                                }
-                                override fun onPlaybackStateChanged(state: Int) {
-                                    android.util.Log.d("MainActivity", "Controller Playback State: $state")
-                                }
-                                override fun onMediaItemTransition(mediaItem: androidx.media3.common.MediaItem?, reason: Int) {
-                                    android.util.Log.d("MainActivity", "Controller MediaItem Transition: ${mediaItem?.mediaId}")
-                                }
-                            })
                             controller = newController
                             android.util.Log.d("MainActivity", "MediaController connectat")
                         } catch (e: Exception) {
@@ -137,7 +128,7 @@ class MainActivity : ComponentActivity() {
                     }, ContextCompat.getMainExecutor(context))
                 }
 
-                MainApp(viewModel, controller, useDarkTheme) { isDark ->
+                MainApp(viewModel, controller, useDarkTheme, syncManager) { isDark ->
                     useDarkTheme = isDark
                     sharedPrefs.edit().putBoolean("dark_theme", isDark).apply()
                 }
@@ -151,6 +142,7 @@ fun MainApp(
     viewModel: MainViewModel, 
     controller: androidx.media3.session.MediaController?,
     isDarkTheme: Boolean,
+    syncManager: SyncManager,
     onDarkThemeChange: (Boolean) -> Unit
 ) {
     val context = LocalContext.current
@@ -165,12 +157,22 @@ fun MainApp(
         mutableLongStateOf(sharedPrefs.getLong("bg_color", Color(0xFFF9F6F0).toArgb().toLong()))
     }
 
+    var syncId by remember {
+        mutableStateOf(sharedPrefs.getString("sync_id", "") ?: "")
+    }
+
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     var currentScreen by remember { mutableIntStateOf(0) }
     var selectedPlaylist by remember { mutableStateOf<Playlist?>(null) }
     
     val strings = getTranslations(currentLanguage)
+
+    LaunchedEffect(syncId) {
+        if (syncId.isNotBlank()) {
+            syncManager.startSync(syncId)
+        }
+    }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -250,6 +252,13 @@ fun MainApp(
                             IconButton(onClick = { scope.launch { drawerState.open() } }) {
                                 Icon(Icons.Default.Menu, contentDescription = "Menu")
                             }
+                        },
+                        actions = {
+                            if (syncId.isNotBlank()) {
+                                IconButton(onClick = { syncManager.uploadLocalData() }) {
+                                    Icon(Icons.Default.CloudUpload, contentDescription = "Sync Now")
+                                }
+                            }
                         }
                     )
                 },
@@ -308,6 +317,11 @@ fun MainApp(
                                 strings = strings,
                                 backgroundColor = Color(backgroundColor.toInt()),
                                 isDarkTheme = isDarkTheme,
+                                syncId = syncId,
+                                onSyncIdChange = {
+                                    syncId = it
+                                    sharedPrefs.edit().putString("sync_id", it).apply()
+                                },
                                 onDarkThemeChange = onDarkThemeChange,
                                 onColorChange = { color ->
                                     backgroundColor = color.toArgb().toLong()
@@ -389,6 +403,8 @@ fun ConfigScreen(
     strings: AppTranslations, 
     backgroundColor: Color, 
     isDarkTheme: Boolean,
+    syncId: String,
+    onSyncIdChange: (String) -> Unit,
     onDarkThemeChange: (Boolean) -> Unit,
     onColorChange: (Color) -> Unit
 ) {
@@ -401,6 +417,26 @@ fun ConfigScreen(
             Spacer(Modifier.weight(1f))
             Switch(checked = isDarkTheme, onCheckedChange = onDarkThemeChange)
         }
+
+        Spacer(Modifier.height(24.dp))
+        Text(strings.syncTitle, style = MaterialTheme.typography.titleMedium)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = syncId,
+                onValueChange = onSyncIdChange,
+                label = { Text(strings.syncIdLabel) },
+                modifier = Modifier.weight(1f),
+                singleLine = true
+            )
+            Spacer(Modifier.width(8.dp))
+            Button(onClick = { 
+                val newId = (100000..999999).random().toString()
+                onSyncIdChange(newId)
+            }) {
+                Text(strings.generate)
+            }
+        }
+        Text(strings.syncHelp, style = MaterialTheme.typography.bodySmall, color = Color.Gray)
 
         Spacer(Modifier.height(24.dp))
         Text(strings.selectColor, style = MaterialTheme.typography.titleMedium)
@@ -484,7 +520,11 @@ data class AppTranslations(
     val brightness: String,
     val preview: String,
     val darkMode: String,
-    val darkThemeNote: String
+    val darkThemeNote: String,
+    val syncTitle: String,
+    val syncIdLabel: String,
+    val syncHelp: String,
+    val generate: String
 )
 
 fun getTranslations(lang: String): AppTranslations {
@@ -492,52 +532,62 @@ fun getTranslations(lang: String): AppTranslations {
         "ENGLISH" -> AppTranslations(
             "Search", "Playlists", "Language", "Configuration", "Donation",
             "If you liked my application you can donate the amount you consider.",
-            "Select background color", "Close", "Brightness", "Preview", "Dark Mode", "Custom color is disabled in Dark Mode"
+            "Select background color", "Close", "Brightness", "Preview", "Dark Mode", "Custom color is disabled in Dark Mode",
+            "Cloud Synchronization", "Sync ID", "Use the same ID on all devices to share your playlists.", "Generate"
         )
         "CATALA" -> AppTranslations(
             "Cerca", "Llistes", "Idioma", "Configuració", "Donació",
             "Si t'ha agradat la meva aplicació pots fer una donació amb l'import que consideris.",
-            "Selecciona el color de fons", "Tancar", "Brillantor", "Vista prèvia", "Mode fosc", "El color personalitzat es desactiva en mode fosc"
+            "Selecciona el color de fons", "Tancar", "Brillantor", "Vista prèvia", "Mode fosc", "El color personalitzat es desactiva en mode fosc",
+            "Sincronització al Núvol", "ID de Sincronització", "Utilitza el mateix ID en tots els dispositius per compartir les teves llistes.", "Generar"
         )
         "GALEGO" -> AppTranslations(
             "Cerca", "Listas", "Lingua", "Configuración", "Doazón",
             "Se che gustou a miña aplicación podes doar o importe que consideres.",
-            "Selecciona a cor de fondo", "Pechar", "Brillo", "Vista previa", "Modo escuro", "A cor personalizada desactívase no modo escuro"
+            "Selecciona a cor de fondo", "Pechar", "Brillo", "Vista previa", "Modo escuro", "A cor personalizada desactívase no modo escuro",
+            "Sincronización na Nube", "ID de Sincronización", "Usa o mesmo ID en todos os teus dispositivos.", "Xerar"
         )
         "EUSKARA" -> AppTranslations(
             "Bilatu", "Zerrendak", "Hizkuntza", "Konfigurazioa", "Dohaintza",
             "Nire aplikazioa gustatu bazaizu, nahi duzun zenbatekoa eman dezakezu.",
-            "Hautatu atzeko planoko kolorea", "Itxi", "Distira", "Aurreikuspena", "Modu iluna", "Kolore pertsonalizatua desgaituta dago modu ilunean"
+            "Hautatu atzeko planoko kolorea", "Itxi", "Distira", "Aurreikuspena", "Modu iluna", "Kolore pertsonalizatua desgaituta dago modu ilunean",
+            "Hodeiko Sinkronizazioa", "Sinkronizazio IDa", "Erabili ID bera gailu guztietan.", "Sortu"
         )
         "FRANCAIS" -> AppTranslations(
             "Recherche", "Listes", "Langue", "Configuration", "Don",
             "Si vous avez aimé mon application, vous pouvez donner le montant que vous considérez.",
-            "Sélectionnez la couleur de fond", "Fermer", "Luminosité", "Aperçu", "Mode sombre", "La couleur personnalisée est désactivée en mode sombre"
+            "Sélectionnez la couleur de fondo", "Fermer", "Luminosité", "Aperçu", "Mode sombre", "La couleur personnalisée est désactivée en mode sombre",
+            "Synchronisation Cloud", "ID de Synchro", "Utilisez le même ID sur tous vos appareils.", "Générer"
         )
         "DEUTSCH" -> AppTranslations(
             "Suche", "Listen", "Sprache", "Konfiguration", "Spende",
             "Wenn Ihnen meine App gefallen hat, können Sie den von Ihnen gewünschten Betrag spenden.",
-            "Hintergrundfarbe auswählen", "Schließen", "Helligkeit", "Vorschau", "Dunkelmodus", "Benutzerdefinierte Farbe ist im Dunkelmodus deaktiviert"
+            "Hintergrundfarbe auswählen", "Schließen", "Helligkeit", "Vorschau", "Dunkelmodus", "Benutzerdefinierte Farbe ist im Dunkelmodus deaktiviert",
+            "Cloud-Synchronisation", "Sync-ID", "Verwenden Sie dieselbe ID auf allen Geräten.", "Generieren"
         )
         "ITALIANO" -> AppTranslations(
             "Cerca", "Liste", "Lingua", "Configurazione", "Donazione",
-            "Se ti è piaciuta la mia app, puoi donare l'importo che consideri.",
-            "Seleziona il colore dello sfondo", "Chiudi", "Luminosità", "Anteprima", "Modalità scura", "Il colore personalizado è disabilitato in modalità scura"
+            "Se ti è piaciuta la mia app, puoi donare l'importo que consideri.",
+            "Seleziona il colore dello sfondo", "Chiudi", "Luminosità", "Anteprima", "Modalità scura", "Il colore personalizado è disabilitato in modalità scura",
+            "Sincronizzazione Cloud", "ID Sincronizzazione", "Usa lo stesso ID su tutti i dispositivi.", "Genera"
         )
         "KOREAN" -> AppTranslations(
             "검색", "재생 목록", "언어", "설정", "기부",
             "내 애플리케이션이 마음에 들면 원하는 금액을 기부할 수 있습니다.",
-            "배경색 선택", "닫기", "밝기", "미리보기", "다크 모드", "다크 모드에서는 사용자 정의 색상이 비활성화됩니다."
+            "배경색 선택", "닫기", "밝기", "미리보기", "다크 모드", "다크 모드에서는 사용자 정의 색상이 비활성화됩니다.",
+            "클라우드 동기화", "동기화 ID", "모든 장치에서 동일한 ID를 사용하여 재생 목록을 공유하십시오.", "생성"
         )
         "JAPANESE" -> AppTranslations(
             "検索", "プレイリスト", "言語", "設定", "寄付",
             "私のアプリケーションが気に入ったら、検討している金額を寄付できます。",
-            "背景色を選択", "閉じる", "明るさ", "プレビュー", "ダークモード", "ダークモードではカスタムカラーが無効になります"
+            "背景色を選択", "閉じる", "明るさ", "プレビュー", "ダークモード", "ダークモードではカスタムカラーが無効になります",
+            "クラウド同期", "同期ID", "すべてのデバイスで同じIDを使用してプレイリストを 공유하십시오.", "生成"
         )
         else -> AppTranslations( // ESPANOL
             "Buscar", "Listas", "Idioma", "Configuración", "Donación",
             "Si te gustó mi aplicación puedes donar la cantidad que consideres.",
-            "Selecciona el color de fondo", "Cerrar", "Brillo", "Vista previa", "Modo oscuro", "El color personalizado se desactiva en modo oscuro"
+            "Selecciona el color de fondo", "Cerrar", "Brillo", "Vista previa", "Modo oscuro", "El color personalizado se desactiva en modo oscuro",
+            "Sincronización en la Nube", "ID de Sincronización", "Usa el mismo ID en todos tus dispositivos para compartir tus listas.", "Generar"
         )
     }
 }

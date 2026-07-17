@@ -3,6 +3,7 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
     kotlin("plugin.serialization") version "2.2.10"
+    id("com.google.gms.google-services") version "4.4.2"
 }
 
 android {
@@ -85,6 +86,10 @@ dependencies {
 
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)
+
+    // Firebase for syncing
+    implementation(platform("com.google.firebase:firebase-bom:33.9.0"))
+    implementation("com.google.firebase:firebase-database-ktx")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

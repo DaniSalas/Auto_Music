@@ -7,7 +7,6 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.net.Uri
 import android.os.Bundle
-import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -21,6 +20,7 @@ import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.session.CommandButton
 import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
@@ -56,6 +56,9 @@ class MusicService : MediaLibraryService() {
     private val serviceJob = SupervisorJob()
     private val serviceScope = CoroutineScope(Dispatchers.Main + serviceJob)
     private lateinit var cache: SimpleCache
+
+    private val COMMAND_RW_10 = SessionCommand("CUSTOM_COMMAND_RW_10", Bundle.EMPTY)
+    private val COMMAND_FF_30 = SessionCommand("CUSTOM_COMMAND_FF_30", Bundle.EMPTY)
 
     private fun createDataSourceFactory(): androidx.media3.datasource.DataSource.Factory {
         val httpDataSourceFactory = DefaultHttpDataSource.Factory()
@@ -209,21 +212,49 @@ class MusicService : MediaLibraryService() {
     private inner class LibrarySessionCallback : MediaLibrarySession.Callback {
         
         override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
-            val connectionResult = super.onConnect(session, controller)
-            val availableSessionCommands = connectionResult.availableSessionCommands.buildUpon()
+            val sessionCommands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
+                .add(COMMAND_RW_10)
+                .add(COMMAND_FF_30)
+                .build()
             
-            // Ensure all basic commands are available for Android Auto
-            val availablePlayerCommands = connectionResult.availablePlayerCommands.buildUpon()
+            val playerCommands = MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS.buildUpon()
                 .add(Player.COMMAND_SEEK_TO_NEXT)
                 .add(Player.COMMAND_SEEK_TO_PREVIOUS)
                 .add(Player.COMMAND_SEEK_FORWARD)
                 .add(Player.COMMAND_SEEK_BACK)
                 .add(Player.COMMAND_PLAY_PAUSE)
                 .add(Player.COMMAND_STOP)
-                .add(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)
+                .add(Player.COMMAND_SET_MEDIA_ITEM)
+                .add(Player.COMMAND_PREPARE)
                 .build()
 
-            return MediaSession.ConnectionResult.accept(availableSessionCommands.build(), availablePlayerCommands)
+            val customLayout = listOf(
+                CommandButton.Builder()
+                    .setDisplayName("RW 10s")
+                    .setIconResId(android.R.drawable.ic_media_rew)
+                    .setSessionCommand(COMMAND_RW_10)
+                    .build(),
+                CommandButton.Builder()
+                    .setDisplayName("FF 30s")
+                    .setIconResId(android.R.drawable.ic_media_ff)
+                    .setSessionCommand(COMMAND_FF_30)
+                    .build()
+            )
+
+            return MediaSession.ConnectionResult.accept(sessionCommands, playerCommands)
+        }
+
+        override fun onCustomCommand(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            customCommand: SessionCommand,
+            args: Bundle
+        ): ListenableFuture<SessionResult> {
+            when (customCommand.customAction) {
+                "CUSTOM_COMMAND_RW_10" -> player.seekBack()
+                "CUSTOM_COMMAND_FF_30" -> player.seekForward()
+            }
+            return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
         }
 
         override fun onAddMediaItems(
@@ -235,7 +266,6 @@ class MusicService : MediaLibraryService() {
             
             serviceScope.launch {
                 val updatedItems = mutableListOf<MediaItem>()
-                
                 for (item in mediaItems) {
                     val songId = item.mediaId
                     val playlistId = item.mediaMetadata.extras?.getString("playlistId")?.toLongOrNull()
@@ -244,13 +274,15 @@ class MusicService : MediaLibraryService() {
                         val playlistSongs = repository.getSongsInPlaylist(playlistId).first()
                         val startIndex = playlistSongs.indexOfFirst { it.id == songId }.coerceAtLeast(0)
                         
-                        // Rotar para empezar en la canción seleccionada pero tener las demás en cola
+                        // Rotamos la lista para que la canción seleccionada sea la primera en la cola
                         val rotatedList = playlistSongs.drop(startIndex) + playlistSongs.take(startIndex)
-                        rotatedList.forEach { updatedItems.add(createMediaItem(it)) }
+                        rotatedList.forEach { updatedItems.add(createMediaItem(it, playlistId)) }
+                        future.set(updatedItems)
+                        return@launch
                     } else if (songId.length > 5 && !songId.startsWith("PLAYLIST_") && songId != "ROOT") {
                         val song = repository.getSongById(songId)
                         if (song != null) {
-                            updatedItems.add(createMediaItem(song))
+                            updatedItems.add(createMediaItem(song, null))
                         } else {
                             updatedItems.add(item)
                         }
@@ -264,7 +296,7 @@ class MusicService : MediaLibraryService() {
             return future
         }
 
-        private fun createMediaItem(song: com.example.auto_music.model.Song): MediaItem {
+        private fun createMediaItem(song: com.example.auto_music.model.Song, playlistId: Long?): MediaItem {
             val localUri = if (song.isDownloaded && song.audioUrl != null) {
                 val file = File(song.audioUrl)
                 if (file.exists()) Uri.fromFile(file).toString() else null
@@ -272,9 +304,10 @@ class MusicService : MediaLibraryService() {
 
             val finalUri = localUri ?: "https://music.youtube.com/watch?v=${song.id}"
             
-            val extras = Bundle()
-            // Android Auto duration metadata
-            extras.putLong("android.media.metadata.DURATION", song.duration * 1000L)
+            val extras = Bundle().apply {
+                if (playlistId != null) putString("playlistId", playlistId.toString())
+                putLong("android.media.metadata.DURATION", song.duration * 1000L)
+            }
             
             return MediaItem.Builder()
                 .setMediaId(song.id)
@@ -300,6 +333,11 @@ class MusicService : MediaLibraryService() {
             browser: MediaSession.ControllerInfo,
             params: LibraryParams?
         ): ListenableFuture<LibraryResult<MediaItem>> {
+            val extras = Bundle().apply {
+                putInt("android.media.browse.CONTENT_STYLE_BROWSABLE_HINT", 1)
+                putInt("android.media.browse.CONTENT_STYLE_PLAYABLE_HINT", 1)
+            }
+            
             val rootItem = MediaItem.Builder()
                 .setMediaId("ROOT")
                 .setMediaMetadata(
@@ -308,6 +346,7 @@ class MusicService : MediaLibraryService() {
                         .setIsBrowsable(true)
                         .setIsPlayable(false)
                         .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+                        .setExtras(extras)
                         .build()
                 )
                 .build()
@@ -327,6 +366,9 @@ class MusicService : MediaLibraryService() {
                 serviceScope.launch {
                     val playlists = repository.allPlaylists.first()
                     val items = playlists.map { playlist ->
+                        val extras = Bundle().apply {
+                            putInt("android.media.browse.CONTENT_STYLE_BROWSABLE_HINT", 1)
+                        }
                         MediaItem.Builder()
                             .setMediaId("PLAYLIST_${playlist.id}")
                             .setMediaMetadata(
@@ -335,6 +377,7 @@ class MusicService : MediaLibraryService() {
                                     .setIsBrowsable(true)
                                     .setIsPlayable(false)
                                     .setMediaType(MediaMetadata.MEDIA_TYPE_PLAYLIST)
+                                    .setExtras(extras)
                                     .build()
                             )
                             .build()
@@ -353,14 +396,17 @@ class MusicService : MediaLibraryService() {
 
                         val finalUri = localUri ?: "https://music.youtube.com/watch?v=${song.id}"
                         
-                        val extras = Bundle()
-                        extras.putString("playlistId", playlistId.toString())
-                        extras.putLong("android.media.metadata.DURATION", song.duration * 1000L)
+                        val extras = Bundle().apply {
+                            putString("playlistId", playlistId.toString())
+                            putLong("android.media.metadata.DURATION", song.duration * 1000L)
+                            putInt("android.media.browse.CONTENT_STYLE_PLAYABLE_HINT", 1)
+                        }
 
                         MediaItem.Builder()
                             .setMediaId(song.id)
                             .setUri(finalUri)
                             .setCustomCacheKey(song.id)
+                            .setMimeType("audio/mpeg")
                             .setMediaMetadata(
                                 MediaMetadata.Builder()
                                     .setTitle(song.title)

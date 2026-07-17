@@ -125,8 +125,13 @@ class MusicRepository(
 
     suspend fun addSongToPlaylist(song: Song, playlistId: Long) {
         musicDao.insertSong(song)
-        val maxPos = musicDao.getMaxPosition(playlistId) ?: -1
-        musicDao.insertSongToPlaylist(PlaylistSongCrossRef(playlistId, song.id, maxPos + 1))
+        
+        // Comprovar si ja existeix la relació per evitar duplicats (important per a la sincronització)
+        val songsInPlaylist = musicDao.getSongsInPlaylist(playlistId).first()
+        if (songsInPlaylist.none { it.id == song.id }) {
+            val maxPos = musicDao.getMaxPosition(playlistId) ?: -1
+            musicDao.insertSongToPlaylist(PlaylistSongCrossRef(playlistId, song.id, maxPos + 1))
+        }
         
         if (!song.isDownloaded) {
             downloadSong(song)

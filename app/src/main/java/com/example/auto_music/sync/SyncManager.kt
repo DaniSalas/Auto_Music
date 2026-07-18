@@ -47,17 +47,27 @@ class SyncManager(
             val songsSnap = snapshot.child("songs")
             val refsSnap = snapshot.child("refs")
 
-            // 1. Sincronitzar llistes i relacions
+            if (!playlistsSnap.exists()) {
+                Log.w("SyncManager", "No hi ha llistes al núvol per a aquest ID")
+                return
+            }
+
+            // 1. Obtenir totes les llistes locals actuals
+            val localPlaylists = repository.allPlaylists.first()
+            val existingSongs = repository.allSongs.first()
+
+            // 2. Processar cada llista del núvol
             playlistsSnap.children.forEach { p ->
                 val playlistName = p.child("name").getValue(String::class.java) ?: "Sense nom"
                 val cloudId = p.key ?: return@forEach
                 
-                val localPlaylists = repository.allPlaylists.first()
+                // Buscar si ja tenim la llista localment (per nom)
                 var localPlaylist = localPlaylists.find { it.name == playlistName }
                 
                 val finalPlaylistId = if (localPlaylist == null) {
+                    Log.i("SyncManager", "Creant llista nova des del núvol: $playlistName")
                     repository.createPlaylist(playlistName)
-                    // Necessitem l'ID que Room ha generat
+                    // Donem temps a Room per processar i busquem l'ID
                     repository.allPlaylists.first().find { it.name == playlistName }?.id ?: -1L
                 } else {
                     localPlaylist.id
@@ -68,31 +78,26 @@ class SyncManager(
                     cloudSongs.forEach { r ->
                         val songId = r.child("songId").getValue(String::class.java) ?: return@forEach
                         
-                        // Buscar si ja tenim la cançó localment per no sobreescriure el camí del fitxer descarregat
-                        val existingSongs = repository.allSongs.first()
-                        val existingSong = existingSongs.find { it.id == songId }
-                        
                         val sSnap = songsSnap.child(songId)
-                        val song = if (existingSong != null) {
-                            existingSong
-                        } else {
-                            Song(
-                                id = songId,
-                                title = sSnap.child("title").getValue(String::class.java) ?: "Unknown",
-                                artist = sSnap.child("artist").getValue(String::class.java) ?: "Unknown",
-                                thumbnailUrl = sSnap.child("thumbnailUrl").getValue(String::class.java) ?: "",
-                                audioUrl = null,
-                                duration = sSnap.child("duration").getValue(Long::class.java) ?: 0L,
-                                isDownloaded = false
-                            )
-                        }
+                        if (!sSnap.exists()) return@forEach
+
+                        val song = existingSongs.find { it.id == songId } ?: Song(
+                            id = songId,
+                            title = sSnap.child("title").getValue(String::class.java) ?: "Unknown",
+                            artist = sSnap.child("artist").getValue(String::class.java) ?: "Unknown",
+                            thumbnailUrl = sSnap.child("thumbnailUrl").getValue(String::class.java) ?: "",
+                            audioUrl = null,
+                            duration = sSnap.child("duration").getValue(Long::class.java) ?: 0L,
+                            isDownloaded = false
+                        )
                         
+                        // repository.addSongToPlaylist ja gestiona no duplicar i baixar si no està
                         repository.addSongToPlaylist(song, finalPlaylistId)
                     }
                 }
             }
             
-            Log.i("SyncManager", "Sincronització del núvol completada")
+            Log.i("SyncManager", "Sincronització del núvol finalitzada correctament")
         } catch (e: Exception) {
             Log.e("SyncManager", "Error processant dades: ${e.message}", e)
         } finally {
@@ -106,7 +111,7 @@ class SyncManager(
         
         scope.launch {
             try {
-                Log.d("SyncManager", "Pujant dades locals al núvol per a ID: $id...")
+                Log.d("SyncManager", "Forçant pujada de dades locals per a ID: $id...")
                 val playlists = repository.allPlaylists.first()
                 val songs = repository.allSongs.first()
                 
@@ -138,10 +143,10 @@ class SyncManager(
                 syncData["refs"] = refsMap
                 
                 database.child("sync").child(id).setValue(syncData)
-                    .addOnSuccessListener { Log.i("SyncManager", "Dades locals pujades amb èxit") }
-                    .addOnFailureListener { Log.e("SyncManager", "Error pujant dades a Firebase: ${it.message}") }
+                    .addOnSuccessListener { Log.i("SyncManager", "Dades pujades manualment amb èxit") }
+                    .addOnFailureListener { Log.e("SyncManager", "Error en pujada manual: ${it.message}") }
             } catch (e: Exception) {
-                Log.e("SyncManager", "Error preparant pujada de dades: ${e.message}", e)
+                Log.e("SyncManager", "Error en uploadLocalData: ${e.message}", e)
             }
         }
     }

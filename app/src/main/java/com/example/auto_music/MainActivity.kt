@@ -111,7 +111,6 @@ class MainActivity : ComponentActivity() {
                 var controller by remember { mutableStateOf<androidx.media3.session.MediaController?>(null) }
                 
                 LaunchedEffect(Unit) {
-                    android.util.Log.d("MainActivity", "Iniciant MediaController...")
                     val sessionToken = androidx.media3.session.SessionToken(
                         context,
                         android.content.ComponentName(context, com.example.auto_music.player.MusicService::class.java)
@@ -121,7 +120,6 @@ class MainActivity : ComponentActivity() {
                         try {
                             val newController = controllerFuture.get()
                             controller = newController
-                            android.util.Log.d("MainActivity", "MediaController connectat")
                         } catch (e: Exception) {
                             android.util.Log.e("MainActivity", "Error connectant MediaController", e)
                         }
@@ -252,13 +250,6 @@ fun MainApp(
                             IconButton(onClick = { scope.launch { drawerState.open() } }) {
                                 Icon(Icons.Default.Menu, contentDescription = "Menu")
                             }
-                        },
-                        actions = {
-                            if (syncId.isNotBlank()) {
-                                IconButton(onClick = { syncManager.uploadLocalData() }) {
-                                    Icon(Icons.Default.CloudUpload, contentDescription = "Sync Now")
-                                }
-                            }
                         }
                     )
                 },
@@ -302,9 +293,11 @@ fun MainApp(
                             0 -> SearchScreen(viewModel, onPlay = { song ->
                                 playSong(song, controller)
                             })
-                            1 -> PlaylistsScreen(viewModel, onPlaylistClick = { playlist ->
-                                selectedPlaylist = playlist
-                            })
+                            1 -> PlaylistsScreen(
+                                viewModel = viewModel, 
+                                onPlaylistClick = { playlist -> selectedPlaylist = playlist },
+                                onManualSync = { if (syncId.isNotBlank()) syncManager.uploadLocalData() }
+                            )
                             2 -> LanguageScreen(
                                 strings = strings,
                                 currentLanguage = currentLanguage,
@@ -543,7 +536,7 @@ fun getTranslations(lang: String): AppTranslations {
         )
         "GALEGO" -> AppTranslations(
             "Cerca", "Listas", "Lingua", "Configuración", "Doazón",
-            "Se che gustou a miña aplicación podes doar o importe que consideres.",
+            "Se che gustou a miña aplicació podes doar o importe que consideres.",
             "Selecciona a cor de fondo", "Pechar", "Brillo", "Vista previa", "Modo escuro", "A cor personalizada desactívase no modo escuro",
             "Sincronización na Nube", "ID de Sincronización", "Usa o mesmo ID en todos os teus dispositivos.", "Xerar"
         )
@@ -556,7 +549,7 @@ fun getTranslations(lang: String): AppTranslations {
         "FRANCAIS" -> AppTranslations(
             "Recherche", "Listes", "Langue", "Configuration", "Don",
             "Si vous avez aimé mon application, vous pouvez donner le montant que vous considérez.",
-            "Sélectionnez la couleur de fondo", "Fermer", "Luminosité", "Aperçu", "Mode sombre", "La couleur personnalisée est désactivée en mode sombre",
+            "Sélectionnez la couleur de fondo", "Fermer", "Luminosité", "Aperçu", "Mode sombre", "La couleur personalizada est désactivée en mode sombre",
             "Synchronisation Cloud", "ID de Synchro", "Utilisez le même ID sur tous vos appareils.", "Générer"
         )
         "DEUTSCH" -> AppTranslations(
@@ -569,7 +562,7 @@ fun getTranslations(lang: String): AppTranslations {
             "Cerca", "Liste", "Lingua", "Configurazione", "Donazione",
             "Se ti è piaciuta la mia app, puoi donare l'importo que consideri.",
             "Seleziona il colore dello sfondo", "Chiudi", "Luminosità", "Anteprima", "Modalità scura", "Il colore personalizado è disabilitato in modalità scura",
-            "Sincronizzazione Cloud", "ID Sincronizzazione", "Usa lo stesso ID su tutti i dispositivi.", "Genera"
+            "Sincronizzazione Cloud", "ID Sincronizzazione", "Usa lo mismo ID en todos los dispositivos.", "Genera"
         )
         "KOREAN" -> AppTranslations(
             "검색", "재생 목록", "언어", "설정", "기부",
@@ -581,7 +574,7 @@ fun getTranslations(lang: String): AppTranslations {
             "検索", "プレイリスト", "言語", "設定", "寄付",
             "私のアプリケーションが気に入ったら、検討している金額を寄付できます。",
             "背景色を選択", "閉じる", "明るさ", "プレビュー", "ダークモード", "ダークモードではカスタムカラーが無効になります",
-            "クラウド同期", "同期ID", "すべてのデバイスで同じIDを使用してプレイリストを 공유하십시오.", "生成"
+            "クラウド同期", "同期ID", "すべてのデバイスで同じIDを使用してプレイリスト를 공유하십시오.", "生成"
         )
         else -> AppTranslations( // ESPANOL
             "Buscar", "Listas", "Idioma", "Configuración", "Donación",

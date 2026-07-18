@@ -6,20 +6,40 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.example.auto_music.model.Playlist
 import com.example.auto_music.ui.MainViewModel
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PlaylistsScreen(viewModel: MainViewModel, onPlaylistClick: (Playlist) -> Unit) {
+fun PlaylistsScreen(
+    viewModel: MainViewModel, 
+    onPlaylistClick: (Playlist) -> Unit,
+    onManualSync: (() -> Unit)? = null
+) {
     val playlists by viewModel.playlists.collectAsState()
     var showCreateDialog by remember { mutableStateOf(false) }
     var newPlaylistName by remember { mutableStateOf("") }
 
     Scaffold(
+        topBar = {
+            if (onManualSync != null) {
+                TopAppBar(
+                    title = { },
+                    actions = {
+                        IconButton(onClick = onManualSync) {
+                            Icon(Icons.Default.Sync, contentDescription = "Sincronitza")
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = androidx.compose.ui.graphics.Color.Transparent)
+                )
+            }
+        },
         floatingActionButton = {
             FloatingActionButton(onClick = { showCreateDialog = true }) {
                 Icon(Icons.Default.Add, contentDescription = "Crea llista de reproducció")

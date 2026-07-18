@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "363903606280",
+    "project_id": "apps-android-id",
+    "storage_bucket": "apps-android-id.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:363903606280:android:d3c32ac36f6c88e82c7bbd",
+        "android_client_info": {
+          "package_name": "com.example.auto_music"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD9A4J61P5EUQBv2uvgUKP5XuSDU8nuFzY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

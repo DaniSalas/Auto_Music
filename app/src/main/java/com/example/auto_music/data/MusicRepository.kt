@@ -119,8 +119,8 @@ class MusicRepository(
         return musicDao.getSongById(songId)
     }
 
-    suspend fun createPlaylist(name: String) {
-        musicDao.insertPlaylist(Playlist(name = name))
+    suspend fun createPlaylist(name: String): Long {
+        return musicDao.insertPlaylist(Playlist(name = name))
     }
 
     suspend fun addSongToPlaylist(song: Song, playlistId: Long) {
@@ -161,6 +161,26 @@ class MusicRepository(
                 }
             }
             musicDao.deleteSong(song)
+        }
+    }
+
+    suspend fun deletePlaylist(playlist: Playlist) {
+        // Obtenir totes les cançons de la llista per comprovar si s'han d'esborrar els fitxers
+        val songs = musicDao.getSongsInPlaylist(playlist.id).first()
+        musicDao.deletePlaylist(playlist)
+        
+        // Comprovar cada cançó
+        songs.forEach { song ->
+            val count = musicDao.getSongOccurrenceCount(song.id)
+            if (count == 0) {
+                song.audioUrl?.let { path ->
+                    try {
+                        val file = File(path)
+                        if (file.exists()) file.delete()
+                    } catch (e: Exception) { }
+                }
+                musicDao.deleteSong(song)
+            }
         }
     }
 

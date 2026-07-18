@@ -6,6 +6,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -25,20 +26,20 @@ fun PlaylistsScreen(
     val playlists by viewModel.playlists.collectAsState()
     var showCreateDialog by remember { mutableStateOf(false) }
     var newPlaylistName by remember { mutableStateOf("") }
+    var playlistToDelete by remember { mutableStateOf<Playlist?>(null) }
 
     Scaffold(
         topBar = {
-            if (onManualSync != null) {
-                TopAppBar(
-                    title = { },
-                    actions = {
+            CenterAlignedTopAppBar(
+                title = { Text("Listas") },
+                actions = {
+                    if (onManualSync != null) {
                         IconButton(onClick = onManualSync) {
                             Icon(Icons.Default.Sync, contentDescription = "Sincronitza")
                         }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = androidx.compose.ui.graphics.Color.Transparent)
-                )
-            }
+                    }
+                }
+            )
         },
         floatingActionButton = {
             FloatingActionButton(onClick = { showCreateDialog = true }) {
@@ -46,7 +47,7 @@ fun PlaylistsScreen(
             }
         }
     ) { padding ->
-        LazyColumn(modifier = Modifier.padding(padding).fillMaxSize().padding(16.dp)) {
+        LazyColumn(modifier = Modifier.padding(padding).fillMaxSize().padding(horizontal = 16.dp)) {
             items(playlists) { playlist ->
                 Card(
                     modifier = Modifier
@@ -54,11 +55,19 @@ fun PlaylistsScreen(
                         .padding(vertical = 4.dp)
                         .clickable { onPlaylistClick(playlist) }
                 ) {
-                    Text(
-                        text = playlist.name,
+                    Row(
                         modifier = Modifier.padding(16.dp),
-                        style = MaterialTheme.typography.titleLarge
-                    )
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = playlist.name,
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.titleLarge
+                        )
+                        IconButton(onClick = { playlistToDelete = playlist }) {
+                            Icon(Icons.Default.Delete, contentDescription = "Eliminar", tint = MaterialTheme.colorScheme.error)
+                        }
+                    }
                 }
             }
         }
@@ -91,6 +100,29 @@ fun PlaylistsScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showCreateDialog = false }) {
+                    Text("Cancel·la")
+                }
+            }
+        )
+    }
+
+    if (playlistToDelete != null) {
+        AlertDialog(
+            onDismissRequest = { playlistToDelete = null },
+            title = { Text("Eliminar llista") },
+            text = { Text("Estàs segur que vols eliminar la llista \"${playlistToDelete?.name}\"?") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        playlistToDelete?.let { viewModel.deletePlaylist(it) }
+                        playlistToDelete = null
+                    }
+                ) {
+                    Text("Eliminar", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { playlistToDelete = null }) {
                     Text("Cancel·la")
                 }
             }

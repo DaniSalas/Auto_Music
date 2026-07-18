@@ -62,6 +62,12 @@ class MainViewModel(private val repository: MusicRepository) : ViewModel() {
         }
     }
 
+    fun deletePlaylist(playlist: Playlist) {
+        viewModelScope.launch {
+            repository.deletePlaylist(playlist)
+        }
+    }
+
     fun reorderSongs(playlistId: Long, songs: List<Song>) {
         viewModelScope.launch {
             repository.updateSongOrder(playlistId, songs)

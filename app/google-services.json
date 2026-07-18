@@ -1,6 +1,7 @@
 {
   "project_info": {
     "project_number": "363903606280",
+    "firebase_url": "https://apps-android-id-default-rtdb.europe-west1.firebasedatabase.app",
     "project_id": "apps-android-id",
     "storage_bucket": "apps-android-id.firebasestorage.app"
   },

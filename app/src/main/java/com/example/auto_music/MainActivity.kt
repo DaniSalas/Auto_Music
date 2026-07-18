@@ -50,6 +50,7 @@ import kotlinx.coroutines.launch
 import androidx.activity.result.contract.ActivityResultContracts
 import android.Manifest
 import android.os.Build
+import android.widget.Toast
 import com.example.auto_music.sync.SyncManager
 
 class MainActivity : ComponentActivity() {
@@ -296,7 +297,23 @@ fun MainApp(
                             1 -> PlaylistsScreen(
                                 viewModel = viewModel, 
                                 onPlaylistClick = { playlist -> selectedPlaylist = playlist },
-                                onManualSync = { if (syncId.isNotBlank()) syncManager.uploadLocalData() }
+                                onManualSync = { 
+                                    if (syncId.isNotBlank()) {
+                                        Toast.makeText(context, "Iniciant sincronització...", Toast.LENGTH_SHORT).show()
+                                        syncManager.uploadLocalData { success ->
+                                            // Assegurem que el Toast es mostra en el fil de la UI
+                                            scope.launch(kotlinx.coroutines.Dispatchers.Main) {
+                                                if (success) {
+                                                    Toast.makeText(context, strings.syncSuccess, Toast.LENGTH_LONG).show()
+                                                } else {
+                                                    Toast.makeText(context, strings.syncError + " (Verifica Firebase)", Toast.LENGTH_LONG).show()
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        Toast.makeText(context, "Posa un ID a Configuració", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
                             )
                             2 -> LanguageScreen(
                                 strings = strings,
@@ -517,7 +534,10 @@ data class AppTranslations(
     val syncTitle: String,
     val syncIdLabel: String,
     val syncHelp: String,
-    val generate: String
+    val generate: String,
+    val deletePlaylist: String,
+    val syncSuccess: String,
+    val syncError: String
 )
 
 fun getTranslations(lang: String): AppTranslations {
@@ -526,61 +546,71 @@ fun getTranslations(lang: String): AppTranslations {
             "Search", "Playlists", "Language", "Configuration", "Donation",
             "If you liked my application you can donate the amount you consider.",
             "Select background color", "Close", "Brightness", "Preview", "Dark Mode", "Custom color is disabled in Dark Mode",
-            "Cloud Synchronization", "Sync ID", "Use the same ID on all devices to share your playlists.", "Generate"
+            "Cloud Synchronization", "Sync ID", "Use the same ID on all devices to share your playlists.", "Generate",
+            "Delete Playlist", "Synchronization successful", "Synchronization error"
         )
         "CATALA" -> AppTranslations(
             "Cerca", "Llistes", "Idioma", "Configuració", "Donació",
             "Si t'ha agradat la meva aplicació pots fer una donació amb l'import que consideris.",
             "Selecciona el color de fons", "Tancar", "Brillantor", "Vista prèvia", "Mode fosc", "El color personalitzat es desactiva en mode fosc",
-            "Sincronització al Núvol", "ID de Sincronització", "Utilitza el mateix ID en tots els dispositius per compartir les teves llistes.", "Generar"
+            "Sincronització al Núvol", "ID de Sincronització", "Utilitza el mateix ID en tots els dispositius per compartir les teves llistes.", "Generar",
+            "Eliminar llista", "Sincronització correcta", "Error en la sincronització"
         )
         "GALEGO" -> AppTranslations(
             "Cerca", "Listas", "Lingua", "Configuración", "Doazón",
             "Se che gustou a miña aplicació podes doar o importe que consideres.",
             "Selecciona a cor de fondo", "Pechar", "Brillo", "Vista previa", "Modo escuro", "A cor personalizada desactívase no modo escuro",
-            "Sincronización na Nube", "ID de Sincronización", "Usa o mesmo ID en todos os teus dispositivos.", "Xerar"
+            "Sincronización na Nube", "ID de Sincronización", "Usa o mesmo ID en todos os teus dispositivos.", "Xerar",
+            "Eliminar lista", "Sincronización correcta", "Error na sincronización"
         )
         "EUSKARA" -> AppTranslations(
             "Bilatu", "Zerrendak", "Hizkuntza", "Konfigurazioa", "Dohaintza",
             "Nire aplikazioa gustatu bazaizu, nahi duzun zenbatekoa eman dezakezu.",
             "Hautatu atzeko planoko kolorea", "Itxi", "Distira", "Aurreikuspena", "Modu iluna", "Kolore pertsonalizatua desgaituta dago modu ilunean",
-            "Hodeiko Sinkronizazioa", "Sinkronizazio IDa", "Erabili ID bera gailu guztietan.", "Sortu"
+            "Hodeiko Sinkronizazioa", "Sinkronizazio IDa", "Erabili ID bera gailu guztietan.", "Sortu",
+            "Zerrenda ezabatu", "Sinkronizazio arrakastatsua", "Errorea sinkronizatzean"
         )
         "FRANCAIS" -> AppTranslations(
             "Recherche", "Listes", "Langue", "Configuration", "Don",
             "Si vous avez aimé mon application, vous pouvez donner le montant que vous considérez.",
             "Sélectionnez la couleur de fondo", "Fermer", "Luminosité", "Aperçu", "Mode sombre", "La couleur personalizada est désactivée en mode sombre",
-            "Synchronisation Cloud", "ID de Synchro", "Utilisez le même ID sur tous vos appareils.", "Générer"
+            "Synchronisation Cloud", "ID de Synchro", "Utilisez le même ID sur tous vos appareils.", "Générer",
+            "Supprimer la liste", "Synchronisation réussie", "Erreur de synchronización"
         )
         "DEUTSCH" -> AppTranslations(
             "Suche", "Listen", "Sprache", "Konfiguration", "Spende",
             "Wenn Ihnen meine App gefallen hat, können Sie den von Ihnen gewünschten Betrag spenden.",
             "Hintergrundfarbe auswählen", "Schließen", "Helligkeit", "Vorschau", "Dunkelmodus", "Benutzerdefinierte Farbe ist im Dunkelmodus deaktiviert",
-            "Cloud-Synchronisation", "Sync-ID", "Verwenden Sie dieselbe ID auf allen Geräten.", "Generieren"
+            "Cloud-Synchronisation", "Sync-ID", "Verwenden Sie dieselbe ID auf allen Geräten.", "Generieren",
+            "Wiedergabeliste löschen", "Synchronisierung erfolgreich", "Synchronisierungsfehler"
         )
         "ITALIANO" -> AppTranslations(
             "Cerca", "Liste", "Lingua", "Configurazione", "Donazione",
-            "Se ti è piaciuta la mia app, puoi donare l'importo que consideri.",
-            "Seleziona il colore dello sfondo", "Chiudi", "Luminosità", "Anteprima", "Modalità scura", "Il colore personalizado è disabilitato in modalità scura",
-            "Sincronizzazione Cloud", "ID Sincronizzazione", "Usa lo mismo ID en todos los dispositivos.", "Genera"
+            "Se ti è piaciuta la mia app, puedes donare l'importo que consideri.",
+            "Seleziona el colore dello sfondo", "Chiudi", "Luminosità", "Anteprima", "Modalità scura", "Il colore personalizado è disabilitato in modalidad scura",
+            "Sincronizzazione Cloud", "ID Sincronizzazione", "Usa lo mismo ID en todos los dispositivos.", "Genera",
+            "Elimina playlist", "Sincronizzazione riuscita", "Errore di sincronizzazione"
         )
         "KOREAN" -> AppTranslations(
             "검색", "재생 목록", "언어", "설정", "기부",
             "내 애플리케이션이 마음에 들면 원하는 금액을 기부할 수 있습니다.",
             "배경색 선택", "닫기", "밝기", "미리보기", "다크 모드", "다크 모드에서는 사용자 정의 색상이 비활성화됩니다.",
-            "클라우드 동기화", "동기화 ID", "모든 장치에서 동일한 ID를 사용하여 재생 목록을 공유하십시오.", "생성"
+            "클라우드 동기화", "동기화 ID", "모든 장치에서 동일한 ID를 사용하여 재생 목록을 공유하십시오.", "생성",
+            "재생 목록 삭제", "동기화 성공", "동기화 오류"
         )
         "JAPANESE" -> AppTranslations(
             "検索", "プレイリスト", "言語", "設定", "寄付",
             "私のアプリケーションが気に入ったら、検討している金額を寄付できます。",
             "背景色を選択", "閉じる", "明るさ", "プレビュー", "ダークモード", "ダークモードではカスタムカラーが無効になります",
-            "クラウド同期", "同期ID", "すべてのデバイスで同じIDを使用してプレイリスト를 공유하십시오.", "生成"
+            "クラウド同期", "同期ID", "すべてのデバイスで同じIDを使用してプレイリストを共有します。", "生成",
+            "プレイリストを削除", "同期に成功しました", "同期エラー"
         )
         else -> AppTranslations( // ESPANOL
             "Buscar", "Listas", "Idioma", "Configuración", "Donación",
             "Si te gustó mi aplicación puedes donar la cantidad que consideres.",
             "Selecciona el color de fondo", "Cerrar", "Brillo", "Vista previa", "Modo oscuro", "El color personalizado se desactiva en modo oscuro",
-            "Sincronización en la Nube", "ID de Sincronización", "Usa el mismo ID en todos tus dispositivos para compartir tus listas.", "Generar"
+            "Sincronización en la Nube", "ID de Sincronización", "Usa el mismo ID en todos tus dispositivos para compartir tus listas.", "Generar",
+            "Eliminar lista", "Sincronización correcta", "Error en la sincronización"
         )
     }
 }

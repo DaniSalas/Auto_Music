@@ -62,9 +62,7 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
         val granted = permissions.entries.all { it.value }
-        if (!granted) {
-            android.util.Log.e("MainActivity", "Permissions denied")
-        }
+        if (!granted) { android.util.Log.e("MainActivity", "Permissions denied") }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -139,6 +137,8 @@ fun MainApp(
     var currentScreen by remember { mutableIntStateOf(0) }
     var selectedPlaylist by remember { mutableStateOf<Playlist?>(null) }
     var isPlayerExpanded by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    
     val strings = getTranslations(currentLanguage)
 
     BackHandler(enabled = drawerState.isOpen || selectedPlaylist != null || currentScreen != 0 || isPlayerExpanded) {
@@ -176,10 +176,22 @@ fun MainApp(
                 },
                 bottomBar = {
                     Column(modifier = if (selectedPlaylist != null) Modifier.navigationBarsPadding() else Modifier) {
-                        controller?.let { MiniPlayer(it, isPlayerExpanded, { isPlayerExpanded = !isPlayerExpanded }) }
+                        controller?.let { 
+                            MiniPlayer(
+                                controller = it, 
+                                isExpanded = isPlayerExpanded,
+                                onToggleExpand = { isPlayerExpanded = !isPlayerExpanded },
+                                onAlbumClick = { query ->
+                                    isPlayerExpanded = false
+                                    selectedPlaylist = null
+                                    searchQuery = query
+                                    currentScreen = 0
+                                }
+                            ) 
+                        }
                         if (selectedPlaylist == null && currentScreen < 2) {
                             NavigationBar {
-                                NavigationBarItem(selected = currentScreen == 0, onClick = { currentScreen = 0 }, icon = { Icon(Icons.Default.Search, null) }, label = { Text(strings.search) })
+                                NavigationBarItem(selected = currentScreen == 0, onClick = { currentScreen = 0; searchQuery = "" }, icon = { Icon(Icons.Default.Search, null) }, label = { Text(strings.search) })
                                 NavigationBarItem(selected = currentScreen == 1, onClick = { currentScreen = 1 }, icon = { Icon(Icons.AutoMirrored.Filled.List, null) }, label = { Text(strings.playlists) })
                             }
                         }
@@ -194,7 +206,7 @@ fun MainApp(
                         })
                     } else {
                         when (currentScreen) {
-                            0 -> SearchScreen(viewModel, { playSong(it, controller, null) })
+                            0 -> SearchScreen(viewModel, searchQuery, { playSong(it, controller, null) })
                             1 -> PlaylistsScreen(viewModel, strings, { selectedPlaylist = it }, {
                                 if (syncId.isNotBlank()) {
                                     Toast.makeText(context, "Sincronitzant...", Toast.LENGTH_SHORT).show()
@@ -226,7 +238,10 @@ fun playSong(song: com.example.auto_music.model.Song, controller: androidx.media
             .setMimeType("audio/mpeg")
             .setCustomCacheKey(song.id)
             .setMediaMetadata(androidx.media3.common.MediaMetadata.Builder().setTitle(song.title).setArtist(song.artist).setArtworkUri(song.thumbnailUrl.toUri())
-                .setExtras(Bundle().apply { if (playlistId != null) putString("playlistId", playlistId.toString()) }).build())
+                .setExtras(Bundle().apply { 
+                    if (playlistId != null) putString("playlistId", playlistId.toString())
+                    putString("album", song.album) 
+                }).build())
             .build()
         it.setMediaItem(mediaItem)
         it.prepare(); it.play()
@@ -294,24 +309,35 @@ fun getTranslations(lang: String): AppTranslations {
         "FRANCAIS" -> AppTranslations("Recherche", "Listes", "Langue", "Configuration", "Don", "Si vous avez aimé mon application, vous pouvez donner le montant que vous considérez.", "Sélectionnez la couleur de fondo", "Fermer", "Luminosité", "Aperçu", "Mode sombre", "La couleur personalizada est désactivée en mode sombre", "Synchronisation Cloud", "ID de Synchro", "Utilisez le même ID sur tous vos appareils.", "Générer", "Supprimer la liste", "Synchronisation réussie", "Erreur de synchronización", "Téléchargements Automatiques", "Listes Privées", "Listes Publiques", "Publique", "Privée", "Créer Publique", "Créer Privée", "sélectionnées")
         "DEUTSCH" -> AppTranslations("Suche", "Listen", "Sprache", "Konfiguration", "Spende", "Wenn Ihnen meine App gefallen hat, können Sie den von Ihnen gewünschten Betrag spenden.", "Hintergrundfarbe auswählen", "Schließen", "Helligkeit", "Vorschau", "Dunkelmodus", "Benutzerdefinierte Farbe ist im Dunkelmodus deaktiviert", "Cloud-Synchronisation", "Sync-ID", "Verwenden Sie dieselbe ID auf allen Geräten.", "Generieren", "Wiedergabeliste löschen", "Synchronisierung erfolgreich", "Synchronisierungsfehler", "Automatische Downloads", "Private Playlists", "Öffentliche Playlists", "Öffentlich", "Privat", "Öffentlich Erstellen", "Privat Erstellen", "ausgewählt")
         "ITALIANO" -> AppTranslations("Cerca", "Liste", "Lingua", "Configurazione", "Donazione", "Se ti è piaciuta la mia app, puedes donare l'importo que consideri.", "Seleziona el colore dello sfondo", "Chiudi", "Luminosità", "Anteprima", "Modalità scura", "Il colore personalizado è disabilitato in modalidad scura", "Sincronizzazione Cloud", "ID Sincronizzazione", "Usa lo stesso ID su tutti i dispositivos.", "Genera", "Elimina playlist", "Sincronizzazione riuscita", "Errore di sincronizzazione", "Download Automatici", "Playlist Private", "Playlist Pubbliche", "Pubblica", "Privata", "Crea Pubblica", "Crea Privata", "selezionate")
-        "KOREAN" -> AppTranslations("검색", "재생 목록", "언어", "설정", "기부", "내 애플리케이션이 마음에 들면 원하는 금액을 기부할 수 있습니다.", "배경색 선택", "닫기", "밝기", "미리보기", "다크 모드", "다크 모드에서는 사용자 정의 색상이 비활성화됩니다.", "클라우드 동기화", "동기화 ID", "모든 장치에서 동일한 ID를 사용하여 재생 목록을 공유하십시오.", "생성", "재생 목록 삭제", "동기화 성공", "동기화 오류", "자동 다운로드", "개인 재생 목록", "공개 재생 목록", "공개", "비공개", "공개 생성", "비공개 생성", "선택됨")
-        "JAPANESE" -> AppTranslations("検索", "プレイリスト", "言語", "設定", "寄付", "私のアプリケーションが気に入ったら、検討している金額を寄付できます。", "背景色を選択", "閉じる", "明るさ", "プレビュー", "ダークモード", "ダークモードではカスタムカラーが無効になります", "クラウド同期", "同期ID", "すべてのデバイスで同じIDを使用してプレイリスト를 공유하십시오.", "生成", "プレイリストを削除", "同期に成功しました", "同期エラー", "自動ダウンロード", "プライベートプレイリスト", "公開プレイリスト", "公開", "秘密", "公開作成", "秘密作成", "選択済み")
+        "KOREAN" -> AppTranslations("검색", "재생 목록", "언어", "설정", "기부", "내 애플리케이션이 마음에 들면 원하는 금액을 기부할 수 있습니다.", "배경색 선택", "닫기", "밝기", "미리보기", "다크 모드", "다크 모드에서는 사용자 정의 색상이 bi활성화됩니다.", "클라우드 동기화", "동기화 ID", "모든 장치에서 동일한 ID를 사용하여 재생 목록을 공유하십시오.", "생성", "재생 목록 삭제", "동기화 성공", "동기화 오류", "자동 다운로드", "개인 재생 목록", "공개 재생 목록", "공개", "비공개", "공개 생성", "비공개 생성", "선택됨")
+        "JAPANESE" -> AppTranslations("検索", "プレイリスト", "言語", "設定", "寄付", "私のアプリケーションが気に入ったら、検討している金額を寄付できます。", "背景色を選択", "閉じる", "明るさ", "プレビュー", "ダークモード", "ダークモードではカスタムカラーが無効になります", "クラウド同期", "同期ID", "すべてのデバイスで同じIDを使用してプレイリスト를 공유하십시오.", "生成", "プレイリスト를 削除", "同期に成功しました", "同期エラー", "自動ダウンロード", "プライベートプレイリスト", "公開プレイリスト", "公開", "秘密", "公開作成", "秘密作成", "選択済み")
         else -> AppTranslations("Buscar", "Listas", "Idioma", "Configuración", "Donación", "Si te gustó mi aplicación puedes donar la cantidad que consideres.", "Selecciona el color de fondo", "Cerrar", "Brillo", "Vista previa", "Modo oscuro", "El color personalizado se desactiva en modo oscuro", "Sincronización en la Nube", "ID de Sincronización", "Usa el mismo ID en todos tus dispositivos para compartir tus listas.", "Generar", "Eliminar lista", "Sincronización correcta", "Error en la sincronización", "Descargas Automáticas", "Listas Privadas", "Listas Públicas", "Pública", "Privada", "Crear Pública", "Crear Privada", "seleccionadas")
     }
 }
 
 @Composable
-fun MiniPlayer(controller: androidx.media3.session.MediaController, isExpanded: Boolean, onToggleExpand: () -> Unit) {
+fun MiniPlayer(
+    controller: androidx.media3.session.MediaController, 
+    isExpanded: Boolean, 
+    onToggleExpand: () -> Unit,
+    onAlbumClick: (String) -> Unit
+) {
     var title by remember { mutableStateOf(controller.mediaMetadata.title?.toString() ?: "") }
     var artist by remember { mutableStateOf(controller.mediaMetadata.artist?.toString() ?: "") }
     var artworkUri by remember { mutableStateOf(controller.mediaMetadata.artworkUri) }
+    var album by remember { mutableStateOf(controller.mediaMetadata.extras?.getString("album") ?: "") }
     var isPlaying by remember { mutableStateOf(controller.isPlaying) }
     var playbackState by remember { mutableIntStateOf(controller.playbackState) }
     var position by remember { mutableLongStateOf(controller.currentPosition) }
     var duration by remember { mutableLongStateOf(controller.duration) }
     DisposableEffect(controller) {
         val listener = object : androidx.media3.common.Player.Listener {
-            override fun onMediaMetadataChanged(mediaMetadata: androidx.media3.common.MediaMetadata) { title = mediaMetadata.title?.toString() ?: ""; artist = mediaMetadata.artist?.toString() ?: ""; artworkUri = mediaMetadata.artworkUri }
+            override fun onMediaMetadataChanged(mediaMetadata: androidx.media3.common.MediaMetadata) { 
+                title = mediaMetadata.title?.toString() ?: ""
+                artist = mediaMetadata.artist?.toString() ?: ""
+                artworkUri = mediaMetadata.artworkUri
+                album = mediaMetadata.extras?.getString("album") ?: ""
+            }
             override fun onIsPlayingChanged(playing: Boolean) { isPlaying = playing }
             override fun onPlaybackStateChanged(state: Int) { playbackState = state }
         }
@@ -325,7 +351,12 @@ fun MiniPlayer(controller: androidx.media3.session.MediaController, isExpanded: 
             Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = if (isExpanded) 16.dp else 4.dp)) {
                 if (isExpanded) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                        AsyncImage(model = artworkUri, contentDescription = null, modifier = Modifier.size(200.dp).background(Color.LightGray, RoundedCornerShape(12.dp)), contentScale = ContentScale.Crop)
+                        AsyncImage(
+                            model = artworkUri, 
+                            contentDescription = null, 
+                            modifier = Modifier.size(200.dp).background(Color.LightGray, RoundedCornerShape(12.dp)).clickable { onAlbumClick(if (album.isNotBlank()) album else artist) }, 
+                            contentScale = ContentScale.Crop
+                        )
                         Spacer(Modifier.height(16.dp)); Text(text = title, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis); Text(text = artist, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.secondary)
                         Spacer(Modifier.height(16.dp)); Slider(value = if (duration > 0) position.toFloat() else 0f, onValueChange = { controller.seekTo(it.toLong()) }, valueRange = 0f..(if (duration > 0) duration.toFloat() else 1f), modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp))
                         Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp), horizontalArrangement = Arrangement.SpaceBetween) { Text(text = formatTime(position), fontSize = 12.sp); Text(text = formatTime(duration), fontSize = 12.sp) }
@@ -339,7 +370,12 @@ fun MiniPlayer(controller: androidx.media3.session.MediaController, isExpanded: 
                     }
                 } else {
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                        AsyncImage(model = artworkUri, contentDescription = null, modifier = Modifier.size(48.dp).padding(end = 12.dp), contentScale = ContentScale.Crop)
+                        AsyncImage(
+                            model = artworkUri, 
+                            contentDescription = null, 
+                            modifier = Modifier.size(48.dp).padding(end = 12.dp).clickable { onAlbumClick(if (album.isNotBlank()) album else artist) },
+                            contentScale = ContentScale.Crop
+                        )
                         Column(modifier = Modifier.weight(1f)) { Text(text = title, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis); Text(text = artist, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                         IconButton(onClick = { controller.seekToPreviousMediaItem() }) { Icon(Icons.Default.SkipPrevious, null) }
                         IconButton(onClick = { if (isPlaying) controller.pause() else controller.play() }) { Icon(imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, null) }

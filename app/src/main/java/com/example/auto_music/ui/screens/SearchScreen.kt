@@ -23,15 +23,27 @@ import com.example.auto_music.model.Song
 import com.example.auto_music.ui.MainViewModel
 
 @Composable
-fun SearchScreen(viewModel: MainViewModel, onPlay: (Song) -> Unit) {
-    var query by remember { mutableStateOf("") }
-    var hasSearched by remember { mutableStateOf(false) }
+fun SearchScreen(
+    viewModel: MainViewModel, 
+    initialQuery: String = "",
+    onPlay: (Song) -> Unit
+) {
+    var query by remember { mutableStateOf(initialQuery) }
+    var hasSearched by remember { mutableStateOf(initialQuery.isNotBlank()) }
     val searchResults by viewModel.searchResults.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val playlists by viewModel.playlists.collectAsState()
     var selectedSong by remember { mutableStateOf<Song?>(null) }
     var showPlaylistDialog by remember { mutableStateOf(false) }
     val keyboardController = LocalSoftwareKeyboardController.current
+
+    LaunchedEffect(initialQuery) {
+        if (initialQuery.isNotBlank()) {
+            query = initialQuery
+            viewModel.search(initialQuery)
+            hasSearched = true
+        }
+    }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         OutlinedTextField(

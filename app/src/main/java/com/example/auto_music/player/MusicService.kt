@@ -55,24 +55,13 @@ class MusicService : MediaLibraryService() {
         val httpDataSourceFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
             .setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.3")
-
         val defaultDataSourceFactory = androidx.media3.datasource.DefaultDataSource.Factory(this, httpDataSourceFactory)
-
         val resolvingDataSourceFactory = ResolvingDataSource.Factory(defaultDataSourceFactory) { dataSpec ->
             val uriString = dataSpec.uri.toString()
-            if (uriString.startsWith("file") || uriString.startsWith("content") || uriString.contains("googlevideo.com")) {
-                return@Factory dataSpec
-            }
-
+            if (uriString.startsWith("file") || uriString.startsWith("content") || uriString.contains("googlevideo.com")) return@Factory dataSpec
             val videoId = dataSpec.key ?: uriString.substringAfter("v=", "").substringBefore("&")
             if (videoId.isEmpty()) return@Factory dataSpec
-
-            val stream = try {
-                runBlocking(Dispatchers.IO) { 
-                    withTimeoutOrNull(10000) { InnertubeResolver.resolveStream(videoId) }
-                }
-            } catch (e: Exception) { null }
-            
+            val stream = try { runBlocking(Dispatchers.IO) { withTimeoutOrNull(10000) { InnertubeResolver.resolveStream(videoId) } } } catch (e: Exception) { null }
             if (stream != null) {
                 val headers = dataSpec.httpRequestHeaders.toMutableMap()
                 headers["User-Agent"] = stream.userAgent
@@ -81,12 +70,7 @@ class MusicService : MediaLibraryService() {
             }
             dataSpec
         }
-
-        return CacheDataSource.Factory()
-            .setCache(cache)
-            .setUpstreamDataSourceFactory(resolvingDataSourceFactory)
-            .setCacheWriteDataSinkFactory(CacheDataSink.Factory().setCache(cache).setFragmentSize(1024 * 1024))
-            .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+        return CacheDataSource.Factory().setCache(cache).setUpstreamDataSourceFactory(resolvingDataSourceFactory).setCacheWriteDataSinkFactory(CacheDataSink.Factory().setCache(cache).setFragmentSize(1024 * 1024)).setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
     }
 
     private val downloadReceiver = object : BroadcastReceiver() {
@@ -101,9 +85,7 @@ class MusicService : MediaLibraryService() {
                     if (statusIdx != -1 && cursor.getInt(statusIdx) == DownloadManager.STATUS_SUCCESSFUL) {
                         val dir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
                         val file = File(dir, "auto_music/$songId.mp3")
-                        if (file.exists()) {
-                            serviceScope.launch { repository.updateSongDownloadStatus(songId, file.absolutePath) }
-                        }
+                        if (file.exists()) serviceScope.launch { repository.updateSongDownloadStatus(songId, file.absolutePath) }
                     }
                     cursor.close()
                 }
@@ -125,8 +107,7 @@ class MusicService : MediaLibraryService() {
         val newPlayer = ExoPlayer.Builder(this)
             .setMediaSourceFactory(DefaultMediaSourceFactory(this).setDataSourceFactory(createDataSourceFactory()))
             .setAudioAttributes(AudioAttributes.Builder().setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).setUsage(C.USAGE_MEDIA).build(), true)
-            .setHandleAudioBecomingNoisy(true)
-            .build()
+            .setHandleAudioBecomingNoisy(true).build()
         
         newPlayer.addListener(object : Player.Listener {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
@@ -149,23 +130,19 @@ class MusicService : MediaLibraryService() {
         }
 
         player = newPlayer
-        
         val intent = Intent(this, com.example.auto_music.MainActivity::class.java)
         val pendingIntent = android.app.PendingIntent.getActivity(this, 0, intent, android.app.PendingIntent.FLAG_IMMUTABLE)
-
-        mediaSession = MediaLibrarySession.Builder(this, newPlayer, LibrarySessionCallback())
-            .setSessionActivity(pendingIntent)
-            .build()
+        mediaSession = MediaLibrarySession.Builder(this, newPlayer, LibrarySessionCallback()).setSessionActivity(pendingIntent).build()
         
         ContextCompat.registerReceiver(this, downloadReceiver, IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE), ContextCompat.RECEIVER_EXPORTED)
     }
 
-    private fun getCustomLayout(): ImmutableList<CommandButton> {
-        return ImmutableList.of(
+    private fun updateCustomLayout() {
+        val customLayout = ImmutableList.of(
             CommandButton.Builder().setDisplayName("Retrocedir 10s").setSessionCommand(COMMAND_SKIP_BACK).setIconResId(androidx.media3.ui.R.drawable.exo_ic_rewind).build(),
-            CommandButton.Builder().setDisplayName("Pròxima").setPlayerCommand(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM).setIconResId(androidx.media3.ui.R.drawable.exo_ic_skip_next).build(),
             CommandButton.Builder().setDisplayName("Avançar 10s").setSessionCommand(COMMAND_SKIP_FORWARD).setIconResId(androidx.media3.ui.R.drawable.exo_ic_forward).build()
         )
+        mediaSession?.setCustomLayout(customLayout)
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = mediaSession
@@ -179,17 +156,19 @@ class MusicService : MediaLibraryService() {
                 .add(SessionCommand.COMMAND_CODE_LIBRARY_GET_ITEM)
                 .add(SessionCommand.COMMAND_CODE_LIBRARY_GET_LIBRARY_ROOT)
                 .add(SessionCommand.COMMAND_CODE_LIBRARY_SUBSCRIBE)
-                .add(SessionCommand.COMMAND_CODE_LIBRARY_SEARCH)
-                .build()
+                .add(SessionCommand.COMMAND_CODE_LIBRARY_SEARCH).build()
 
             val playerCommands = MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS.buildUpon()
-                .add(Player.COMMAND_SEEK_TO_NEXT).add(Player.COMMAND_SEEK_TO_PREVIOUS)
-                .add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM).add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
-                .add(Player.COMMAND_SEEK_FORWARD).add(Player.COMMAND_SEEK_BACK)
+                .add(Player.COMMAND_SEEK_TO_NEXT)
+                .add(Player.COMMAND_SEEK_TO_PREVIOUS)
+                .add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+                .add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+                .add(Player.COMMAND_SEEK_FORWARD)
+                .add(Player.COMMAND_SEEK_BACK)
                 .add(Player.COMMAND_GET_TIMELINE).build()
 
             serviceScope.launch {
-                mediaSession?.setCustomLayout(getCustomLayout())
+                updateCustomLayout()
             }
 
             return MediaSession.ConnectionResult.accept(sessionCommands, playerCommands)
@@ -228,9 +207,9 @@ class MusicService : MediaLibraryService() {
                 .setIsBrowsable(false).setIsPlayable(true).setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
                 .setExtras(Bundle().apply { 
                     if (playlistId != null) putString("playlistId", playlistId.toString())
-                    putLong("android.media.metadata.DURATION", song.duration * 1000L) 
-                })
-                .build()
+                    putLong("android.media.metadata.DURATION", song.duration * 1000L)
+                    putString("album", song.album)
+                }).build()
             return MediaItem.Builder().setMediaId(song.id).setUri(uri).setMimeType("audio/mpeg").setCustomCacheKey(song.id).setMediaMetadata(metadata).build()
         }
 

@@ -75,7 +75,7 @@ class SyncManager(
                 val playlistName = p.child("name").getValue(String::class.java) ?: "Nova llista"
                 val cloudId = p.key ?: return@forEach
                 
-                // Match by cloudId for public, or name for private (simple strategy)
+                // Search by cloudId for public lists, or name for private
                 var localPlaylist = if (isPublic) {
                     localPlaylists.find { it.cloudId == cloudId }
                 } else {
@@ -83,12 +83,8 @@ class SyncManager(
                 }
 
                 val finalPlaylistId = if (localPlaylist == null) {
-                    repository.createPlaylist(playlistName, isPublic)
-                    // If public, we might need to update the cloudId to match the one from cloud
-                    // But our repository generates a NEW one. 
-                    // Let's improve repository or use cloudId here.
-                    // For now, let's assume names are unique enough or just use the cloud one.
-                    repository.allPlaylists.first().find { it.name == playlistName }?.id ?: -1L
+                    // Create playlist using the EXACT cloudId from Firebase to avoid future duplicates
+                    repository.createPlaylist(playlistName, isPublic, cloudId)
                 } else {
                     localPlaylist.id
                 }

@@ -23,11 +23,13 @@ import coil.compose.AsyncImage
 import com.example.auto_music.model.Playlist
 import com.example.auto_music.model.Song
 import com.example.auto_music.ui.MainViewModel
+import com.example.auto_music.AppTranslations
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun PlaylistSongsScreen(
     viewModel: MainViewModel,
+    strings: AppTranslations,
     playlist: Playlist,
     onBack: () -> Unit,
     onPlay: (Song) -> Unit
@@ -44,19 +46,15 @@ fun PlaylistSongsScreen(
         }
     }
 
-    var draggedItemIndex by remember { mutableStateOf<Int?>(null) }
-    var dragOffsetY by remember { mutableFloatStateOf(0f) }
-    var initialIndex by remember { mutableStateOf<Int?>(null) }
-    var totalDragOffsetY by remember { mutableFloatStateOf(0f) }
     val density = androidx.compose.ui.platform.LocalDensity.current.density
-    val itemHeightPx = 100f * density // Estimated item height
+    val itemHeightPx = 100f * density 
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { 
                     if (isSelectionMode) {
-                        Text("${selectedSongs.size} seleccionades")
+                        Text("${selectedSongs.size} ${strings.selectedItems}")
                     } else {
                         Text(playlist.name)
                     }
@@ -85,6 +83,11 @@ fun PlaylistSongsScreen(
             )
         }
     ) { padding ->
+        var draggedItemIndex by remember { mutableStateOf<Int?>(null) }
+        var dragOffsetY by remember { mutableFloatStateOf(0f) }
+        var initialIndex by remember { mutableStateOf<Int?>(null) }
+        var totalDragOffsetY by remember { mutableFloatStateOf(0f) }
+
         LazyColumn(modifier = Modifier.padding(padding).fillMaxSize().padding(horizontal = 16.dp)) {
             itemsIndexed(songs, key = { _, song -> song.id }) { index, song ->
                 val isDragging = draggedItemIndex == index
@@ -110,7 +113,7 @@ fun PlaylistSongsScreen(
                                 }
                             },
                             onLongClick = {
-                                if (!isSelected) selectedSongs.add(song)
+                                if (!isSelectionMode) selectedSongs.add(song)
                             }
                         ),
                     colors = CardDefaults.cardColors(
@@ -139,10 +142,8 @@ fun PlaylistSongsScreen(
                                             onDrag = { change, dragAmount ->
                                                 change.consume()
                                                 totalDragOffsetY += dragAmount.y
-                                                
                                                 val targetIndex = (initialIndex!! + (totalDragOffsetY / itemHeightPx).toInt())
                                                     .coerceIn(0, songs.size - 1)
-                                                
                                                 if (targetIndex != draggedItemIndex) {
                                                     val mutableSongs = songs.toMutableList()
                                                     val item = mutableSongs.removeAt(draggedItemIndex!!)
@@ -155,12 +156,8 @@ fun PlaylistSongsScreen(
                                             onDragEnd = { 
                                                 viewModel.reorderSongs(playlist.id, songs)
                                                 draggedItemIndex = null
-                                                dragOffsetY = 0f
                                             },
-                                            onDragCancel = { 
-                                                draggedItemIndex = null
-                                                dragOffsetY = 0f
-                                            }
+                                            onDragCancel = { draggedItemIndex = null }
                                         )
                                     }
                                     .padding(end = 8.dp)
@@ -176,20 +173,14 @@ fun PlaylistSongsScreen(
                             )
                         }
 
-                        AsyncImage(
-                            model = song.thumbnailUrl,
-                            contentDescription = null,
-                            modifier = Modifier.size(56.dp).padding(end = 8.dp),
-                            contentScale = ContentScale.Crop
-                        )
+                        AsyncImage(model = song.thumbnailUrl, contentDescription = null, modifier = Modifier.size(56.dp).padding(end = 8.dp), contentScale = ContentScale.Crop)
                         Column(modifier = Modifier.weight(1f)) {
                             Text(song.title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                             Text(song.artist, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                             if (song.isDownloaded) {
-                                Text("✓ Descarregada", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                                Text("✓ Descarregada", style = MaterialTheme.typography.labelSmall, color = Color(0xFF4CAF50), fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
                             }
                         }
-                        
                         if (!isSelectionMode) {
                             IconButton(onClick = { onPlay(song) }) {
                                 Icon(Icons.Default.PlayArrow, contentDescription = "Reprodueix")

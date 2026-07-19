@@ -65,19 +65,19 @@ class MusicService : MediaLibraryService() {
 
             val stream = try {
                 runBlocking(Dispatchers.IO) { 
-                    withTimeoutOrNull(5000) {
+                    withTimeoutOrNull(10000) {
                         InnertubeResolver.resolveStream(videoId)
                     }
                 }
             } catch (e: Exception) { 
-                Log.e("MusicService", "Error resolving stream for $videoId: ${e.message}")
+                Log.e("MusicService", "Error resolving $videoId: ${e.message}")
                 null 
             }
             
             if (stream != null) {
                 val headers = dataSpec.httpRequestHeaders.toMutableMap()
                 headers["User-Agent"] = stream.userAgent
-                if (stream.userAgent.contains("Mozilla") && !stream.userAgent.contains("Android")) {
+                if (stream.userAgent.contains("Mozilla")) {
                     headers["Referer"] = "https://music.youtube.com/"
                 }
                 return@Factory dataSpec.withUri(Uri.parse(stream.url)).withRequestHeaders(headers)
@@ -88,7 +88,7 @@ class MusicService : MediaLibraryService() {
         return CacheDataSource.Factory()
             .setCache(cache)
             .setUpstreamDataSourceFactory(resolvingDataSourceFactory)
-            .setCacheWriteDataSinkFactory(CacheDataSink.Factory().setCache(cache).setFragmentSize(512 * 1024))
+            .setCacheWriteDataSinkFactory(CacheDataSink.Factory().setCache(cache).setFragmentSize(1024 * 1024))
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
     }
 
@@ -98,14 +98,17 @@ class MusicService : MediaLibraryService() {
             if (id != -1L) {
                 val songId = context.getSharedPreferences("downloads", Context.MODE_PRIVATE).getString(id.toString(), null) ?: return
                 val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-                val query = DownloadManager.Query().setFilterById(id)
-                val cursor = downloadManager.query(query)
+                val cursor = downloadManager.query(DownloadManager.Query().setFilterById(id))
                 if (cursor != null && cursor.moveToFirst()) {
-                    val status = try { cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)) } catch (e: Exception) { -1 }
-                    if (status == DownloadManager.STATUS_SUCCESSFUL) {
-                        val localUri = cursor.getString(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_LOCAL_URI))
-                        Uri.parse(localUri).path?.let { path ->
-                            serviceScope.launch { repository.updateSongDownloadStatus(songId, path) }
+                    val statusIdx = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
+                    if (statusIdx != -1 && cursor.getInt(statusIdx) == DownloadManager.STATUS_SUCCESSFUL) {
+                        val localUriIdx = cursor.getColumnIndex(DownloadManager.COLUMN_LOCAL_URI)
+                        if (localUriIdx != -1) {
+                            val localUri = cursor.getString(localUriIdx)
+                            val path = Uri.parse(localUri).path
+                            if (path != null) {
+                                serviceScope.launch { repository.updateSongDownloadStatus(songId, path) }
+                            }
                         }
                     }
                     cursor.close()
@@ -117,13 +120,11 @@ class MusicService : MediaLibraryService() {
 
     override fun onCreate() {
         super.onCreate()
-        Log.d("MusicService", "onCreate: Iniciant servei v4.5")
-        
+        Log.d("MusicService", "onCreate: v4.7")
         serviceScope.launch { com.example.auto_music.data.remote.Innertube.fetchVisitorData() }
-        
         cache = PlayerCache.getInstance(applicationContext)
         val database = MusicDatabase.getDatabase(applicationContext)
-        val okHttpClient = OkHttpClient.Builder().connectTimeout(30, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).build()
+        val okHttpClient = OkHttpClient.Builder().connectTimeout(30, TimeUnit.SECONDS).build()
         val retrofit = Retrofit.Builder().baseUrl("https://www.youtube.com/").client(okHttpClient).addConverterFactory(GsonConverterFactory.create()).build()
         repository = MusicRepository(database.musicDao(), retrofit.create(YouTubeService::class.java), applicationContext)
 
@@ -131,32 +132,18 @@ class MusicService : MediaLibraryService() {
             .setMediaSourceFactory(DefaultMediaSourceFactory(this).setDataSourceFactory(createDataSourceFactory()))
             .setAudioAttributes(AudioAttributes.Builder().setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).setUsage(C.USAGE_MEDIA).build(), true)
             .setHandleAudioBecomingNoisy(true)
-            .setWakeMode(C.WAKE_MODE_NETWORK)
             .build()
         
         player = newPlayer
-
         mediaSession = MediaLibrarySession.Builder(this, newPlayer, LibrarySessionCallback()).build()
-        
-        ContextCompat.registerReceiver(
-            this, 
-            downloadReceiver, 
-            IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE), 
-            ContextCompat.RECEIVER_EXPORTED
-        )
+        ContextCompat.registerReceiver(this, downloadReceiver, IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE), ContextCompat.RECEIVER_EXPORTED)
     }
 
-    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? {
-        Log.d("MusicService", "onGetSession: Sol·licitat per ${controllerInfo.packageName}")
-        return mediaSession
-    }
+    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = mediaSession
 
     private inner class LibrarySessionCallback : MediaLibrarySession.Callback {
         
         override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
-            Log.d("MusicService", "onConnect: Connectat des de ${controller.packageName}")
-            
-            // Accept all default commands
             val sessionCommands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
                 .add(SessionCommand(SessionCommand.COMMAND_CODE_LIBRARY_GET_CHILDREN))
                 .add(SessionCommand(SessionCommand.COMMAND_CODE_LIBRARY_GET_ITEM))
@@ -167,15 +154,12 @@ class MusicService : MediaLibraryService() {
             val playerCommands = MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS.buildUpon()
                 .add(Player.COMMAND_SEEK_TO_NEXT)
                 .add(Player.COMMAND_SEEK_TO_PREVIOUS)
-                .add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
-                .add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
                 .add(Player.COMMAND_SEEK_FORWARD)
                 .add(Player.COMMAND_SEEK_BACK)
                 .add(Player.COMMAND_PLAY_PAUSE)
-                .add(Player.COMMAND_PREPARE)
                 .add(Player.COMMAND_STOP)
                 .add(Player.COMMAND_SET_MEDIA_ITEM)
-                .add(Player.COMMAND_GET_CURRENT_MEDIA_ITEM)
+                .add(Player.COMMAND_PREPARE)
                 .add(Player.COMMAND_GET_TIMELINE)
                 .build()
 
@@ -190,48 +174,33 @@ class MusicService : MediaLibraryService() {
             startPositionMs: Long
         ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
             val future = SettableFuture.create<MediaSession.MediaItemsWithStartPosition>()
-            
             serviceScope.launch {
-                Log.d("MusicService", "onSetMediaItems: Carregant ${mediaItems.size} ítems")
-                val item = mediaItems.firstOrNull() ?: run {
+                val firstItem = mediaItems.firstOrNull() ?: run {
                     future.set(MediaSession.MediaItemsWithStartPosition(mediaItems, startIndex, startPositionMs))
                     return@launch
                 }
                 
-                val playlistId = item.mediaMetadata.extras?.getString("playlistId")?.toLongOrNull()
+                val playlistId = firstItem.mediaMetadata.extras?.getString("playlistId")?.toLongOrNull()
                 if (playlistId != null && mediaItems.size == 1) {
-                    val playlistSongs = repository.getSongsInPlaylist(playlistId).first()
-                    val items = playlistSongs.map { createMediaItem(it, playlistId) }
-                    val indexInPlaylist = playlistSongs.indexOfFirst { it.id == item.mediaId }.coerceAtLeast(0)
-                    Log.d("MusicService", "onSetMediaItems: Expandint llista $playlistId a ${items.size} cançons")
-                    future.set(MediaSession.MediaItemsWithStartPosition(items, indexInPlaylist, startPositionMs))
+                    val songs = repository.getSongsInPlaylist(playlistId).first()
+                    val items = songs.map { createMediaItem(it, playlistId) }
+                    val index = songs.indexOfFirst { it.id == firstItem.mediaId }.coerceAtLeast(0)
+                    future.set(MediaSession.MediaItemsWithStartPosition(items, index, startPositionMs))
                 } else {
-                    val updatedItems = mutableListOf<MediaItem>()
-                    for (it in mediaItems) {
+                    val updated = mediaItems.map { 
                         if (it.mediaId.length > 5 && !it.mediaId.startsWith("PLAYLIST_")) {
-                            val song = repository.getSongById(it.mediaId)
-                            if (song != null) {
-                                updatedItems.add(createMediaItem(song, null))
-                            } else {
-                                updatedItems.add(it)
-                            }
-                        } else {
-                            updatedItems.add(it)
-                        }
+                            repository.getSongById(it.mediaId)?.let { song -> createMediaItem(song, null) } ?: it
+                        } else it
                     }
-                    future.set(MediaSession.MediaItemsWithStartPosition(updatedItems, startIndex, startPositionMs))
+                    future.set(MediaSession.MediaItemsWithStartPosition(updated, startIndex, startPositionMs))
                 }
             }
-            
             return future
         }
 
         private fun createMediaItem(song: com.example.auto_music.model.Song, playlistId: Long?): MediaItem {
-            val finalUri = if (song.isDownloaded && song.audioUrl != null && File(song.audioUrl).exists()) {
-                Uri.fromFile(File(song.audioUrl)).toString()
-            } else {
-                "https://music.youtube.com/watch?v=${song.id}"
-            }
+            val isLocal = song.isDownloaded && song.audioUrl != null && File(song.audioUrl).exists()
+            val uri = if (isLocal) Uri.fromFile(File(song.audioUrl)).toString() else "https://music.youtube.com/watch?v=${song.id}"
             
             val metadata = MediaMetadata.Builder()
                 .setTitle(song.title)
@@ -248,14 +217,14 @@ class MusicService : MediaLibraryService() {
 
             return MediaItem.Builder()
                 .setMediaId(song.id)
-                .setUri(finalUri)
+                .setUri(uri)
                 .setMimeType("audio/mpeg")
+                .setCustomCacheKey(song.id)
                 .setMediaMetadata(metadata)
                 .build()
         }
 
         override fun onGetLibraryRoot(session: MediaLibrarySession, browser: MediaSession.ControllerInfo, params: LibraryParams?): ListenableFuture<LibraryResult<MediaItem>> {
-            Log.d("MusicService", "onGetLibraryRoot: Sol·licitat")
             val rootMetadata = MediaMetadata.Builder()
                 .setTitle("Auto Music")
                 .setIsBrowsable(true)
@@ -266,15 +235,11 @@ class MusicService : MediaLibraryService() {
                     putInt("android.media.browse.CONTENT_STYLE_PLAYABLE_HINT", 1)
                 }).build()
 
-            val rootItem = MediaItem.Builder()
-                .setMediaId("ROOT")
-                .setMediaMetadata(rootMetadata)
-                .build()
+            val rootItem = MediaItem.Builder().setMediaId("ROOT").setMediaMetadata(rootMetadata).build()
             return Futures.immediateFuture(LibraryResult.ofItem(rootItem, params))
         }
 
         override fun onGetChildren(session: MediaLibrarySession, browser: MediaSession.ControllerInfo, parentId: String, page: Int, pageSize: Int, params: LibraryParams?): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
-            Log.d("MusicService", "onGetChildren: parentId=$parentId")
             val future = SettableFuture.create<LibraryResult<ImmutableList<MediaItem>>>()
             serviceScope.launch {
                 try {
@@ -298,13 +263,12 @@ class MusicService : MediaLibraryService() {
                     } else if (parentId.startsWith("PLAYLIST_")) {
                         val playlistId = parentId.removePrefix("PLAYLIST_").toLong()
                         val songs = repository.getSongsInPlaylist(playlistId).first()
-                        val items = songs.map { song -> createMediaItem(song, playlistId) }
+                        val items = songs.map { createMediaItem(it, playlistId) }
                         future.set(LibraryResult.ofItemList(items, params))
                     } else {
                         future.set(LibraryResult.ofError(LibraryResult.RESULT_ERROR_BAD_VALUE))
                     }
                 } catch (e: Exception) {
-                    Log.e("MusicService", "Error in onGetChildren: ${e.message}")
                     future.set(LibraryResult.ofError(LibraryResult.RESULT_ERROR_UNKNOWN))
                 }
             }
@@ -313,7 +277,6 @@ class MusicService : MediaLibraryService() {
     }
 
     override fun onDestroy() {
-        Log.d("MusicService", "onDestroy")
         unregisterReceiver(downloadReceiver)
         mediaSession?.release()
         player?.release()

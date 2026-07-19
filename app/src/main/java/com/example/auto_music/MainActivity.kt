@@ -25,6 +25,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -46,6 +47,7 @@ import android.content.Context
 import androidx.compose.ui.platform.LocalContext
 import kotlin.OptIn
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.common.Player
 import kotlinx.coroutines.launch
 import androidx.activity.result.contract.ActivityResultContracts
 import android.Manifest
@@ -294,13 +296,13 @@ fun MainApp(
                             playlist = selectedPlaylist!!,
                             onBack = { selectedPlaylist = null },
                             onPlay = { song ->
-                                playSong(song, controller)
+                                playSong(song, controller, selectedPlaylist?.id)
                             }
                         )
                     } else {
                         when (currentScreen) {
                             0 -> SearchScreen(viewModel, onPlay = { song ->
-                                playSong(song, controller)
+                                playSong(song, controller, null)
                             })
                             1 -> PlaylistsScreen(
                                 viewModel = viewModel, 
@@ -366,7 +368,7 @@ fun MainApp(
     }
 }
 
-fun playSong(song: com.example.auto_music.model.Song, controller: androidx.media3.session.MediaController?) {
+fun playSong(song: com.example.auto_music.model.Song, controller: androidx.media3.session.MediaController?, playlistId: Long?) {
     android.util.Log.d("MainActivity", "Reproduint: ${song.title} (${song.id})")
     controller?.let {
         val mediaItem = androidx.media3.common.MediaItem.Builder()
@@ -384,6 +386,9 @@ fun playSong(song: com.example.auto_music.model.Song, controller: androidx.media
                     .setTitle(song.title)
                     .setArtist(song.artist)
                     .setArtworkUri(song.thumbnailUrl.toUri())
+                    .setExtras(Bundle().apply {
+                        if (playlistId != null) putString("playlistId", playlistId.toString())
+                    })
                     .build()
             )
             .build()
@@ -659,9 +664,9 @@ fun getTranslations(lang: String): AppTranslations {
         )
         "JAPANESE" -> AppTranslations(
             "検索", "プレイリスト", "言語", "設定", "寄付",
-            "私のアプリケーションが気に入ったら、検討している金額を寄付できます。",
+            "私のアプリケーションが気に入ったら、検討している金額를 기부할 수 있습니다.",
             "背景色を選択", "閉じる", "明るさ", "プレビュー", "ダークモード", "ダークモードではカスタムカラーが無効になります",
-            "クラウド同期", "同期ID", "すべてのデバイスで同じIDを使用してプレイリストを共有します。", "生成",
+            "クラウド同期", "同期ID", "すべてのデバイスで同じIDを使用してプレイリストを 공유하십시오.", "生成",
             "プレイリストを削除", "同期に成功しました", "同期エラー",
             "自動ダウンロード", "プライベートプレイリスト", "公開プレイリスト",
             "公開", "秘密", "公開作成", "秘密作成"
@@ -687,6 +692,8 @@ fun MiniPlayer(controller: androidx.media3.session.MediaController) {
     var playbackState by remember { mutableIntStateOf(controller.playbackState) }
     var position by remember { mutableLongStateOf(controller.currentPosition) }
     var duration by remember { mutableLongStateOf(controller.duration) }
+    
+    var isExpanded by remember { mutableStateOf(false) }
 
     DisposableEffect(controller) {
         val listener = object : androidx.media3.common.Player.Listener {
@@ -695,19 +702,11 @@ fun MiniPlayer(controller: androidx.media3.session.MediaController) {
                 artist = mediaMetadata.artist?.toString() ?: ""
                 artworkUri = mediaMetadata.artworkUri
             }
-
-            override fun onIsPlayingChanged(playing: Boolean) {
-                isPlaying = playing
-            }
-
-            override fun onPlaybackStateChanged(state: Int) {
-                playbackState = state
-            }
+            override fun onIsPlayingChanged(playing: Boolean) { isPlaying = playing }
+            override fun onPlaybackStateChanged(state: Int) { playbackState = state }
         }
         controller.addListener(listener)
-        onDispose {
-            controller.removeListener(listener)
-        }
+        onDispose { controller.removeListener(listener) }
     }
 
     LaunchedEffect(isPlaying, playbackState) {
@@ -720,57 +719,74 @@ fun MiniPlayer(controller: androidx.media3.session.MediaController) {
         }
     }
 
+    fun formatTime(ms: Long): String {
+        val totalSeconds = (ms / 1000).toInt()
+        val minutes = totalSeconds / 60
+        val seconds = totalSeconds % 60
+        return "%d:%02d".format(minutes, seconds)
+    }
+
     if (title.isNotEmpty()) {
         Surface(
             color = MaterialTheme.colorScheme.primaryContainer,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().clickable { isExpanded = !isExpanded },
             tonalElevation = 8.dp
         ) {
-            Column {
-                if (playbackState == androidx.media3.common.Player.STATE_BUFFERING) {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                } else if (duration > 0) {
-                    LinearProgressIndicator(
-                        progress = { if (duration > 0) position.toFloat() / duration.toFloat() else 0f },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-                
-                Row(
-                    modifier = Modifier
-                        .padding(8.dp)
-                        .fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    AsyncImage(
-                        model = artworkUri,
-                        contentDescription = null,
-                        modifier = Modifier
-                            .size(48.dp)
-                            .padding(end = 12.dp),
-                        contentScale = ContentScale.Crop
-                    )
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = title,
-                            style = MaterialTheme.typography.bodyMedium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+            Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = if (isExpanded) 16.dp else 4.dp)) {
+                if (isExpanded) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                        AsyncImage(
+                            model = artworkUri,
+                            contentDescription = null,
+                            modifier = Modifier.size(200.dp).background(Color.LightGray, RoundedCornerShape(12.dp)),
+                            contentScale = ContentScale.Crop
                         )
-                        Text(
-                            text = artist,
-                            style = MaterialTheme.typography.bodySmall,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                        Spacer(Modifier.height(16.dp))
+                        Text(text = title, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(text = artist, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.secondary)
+                        
+                        Spacer(Modifier.height(16.dp))
+                        
+                        // Seek Slider
+                        Slider(
+                            value = if (duration > 0) position.toFloat() else 0f,
+                            onValueChange = { controller.seekTo(it.toLong()) },
+                            valueRange = 0f..(if (duration > 0) duration.toFloat() else 1f),
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
                         )
+                        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text(text = formatTime(position), fontSize = 12.sp)
+                            Text(text = formatTime(duration), fontSize = 12.sp)
+                        }
+
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center, modifier = Modifier.fillMaxWidth()) {
+                            IconButton(onClick = { controller.seekBack() }) { Icon(Icons.Default.Replay10, null) }
+                            IconButton(onClick = { controller.seekToPreviousMediaItem() }) { Icon(Icons.Default.SkipPrevious, null) }
+                            IconButton(onClick = { if (isPlaying) controller.pause() else controller.play() }, modifier = Modifier.size(64.dp)) {
+                                Icon(imageVector = if (isPlaying) Icons.Default.PauseCircle else Icons.Default.PlayCircle, contentDescription = null, modifier = Modifier.fillMaxSize())
+                            }
+                            IconButton(onClick = { controller.seekToNextMediaItem() }) { Icon(Icons.Default.SkipNext, null) }
+                            IconButton(onClick = { controller.seekForward() }) { Icon(Icons.Default.Forward10, null) }
+                        }
                     }
-                    IconButton(onClick = {
-                        if (isPlaying) controller.pause() else controller.play()
-                    }) {
-                        Icon(
-                            imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            contentDescription = if (isPlaying) "Pausa" else "Reprodueix"
-                        )
+                } else {
+                    // Mini Player
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        AsyncImage(model = artworkUri, contentDescription = null, modifier = Modifier.size(48.dp).padding(end = 12.dp), contentScale = ContentScale.Crop)
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(text = title, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(text = artist, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        IconButton(onClick = { controller.seekToPreviousMediaItem() }) { Icon(Icons.Default.SkipPrevious, null) }
+                        IconButton(onClick = { if (isPlaying) controller.pause() else controller.play() }) {
+                            Icon(imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = null)
+                        }
+                        IconButton(onClick = { controller.seekToNextMediaItem() }) { Icon(Icons.Default.SkipNext, null) }
+                    }
+                    if (playbackState == Player.STATE_BUFFERING) {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    } else if (duration > 0) {
+                        LinearProgressIndicator(progress = { position.toFloat() / duration.toFloat() }, modifier = Modifier.fillMaxWidth())
                     }
                 }
             }

@@ -1,6 +1,7 @@
 package com.example.auto_music.model
 
 import androidx.room.Entity
+import androidx.room.ForeignKey
 import androidx.room.PrimaryKey
 
 @Entity(tableName = "playlists")
@@ -9,10 +10,21 @@ data class Playlist(
     val name: String,
     val description: String = "",
     val isPublic: Boolean = false,
-    val cloudId: String? = null // Used for syncing public playlists across different users
+    val cloudId: String? = null
 )
 
-@Entity(tableName = "playlist_song_cross_ref", primaryKeys = ["playlistId", "songId"])
+@Entity(
+    tableName = "playlist_song_cross_ref",
+    primaryKeys = ["playlistId", "songId"],
+    foreignKeys = [
+        ForeignKey(
+            entity = Playlist::class,
+            parentColumns = ["id"],
+            childColumns = ["playlistId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ]
+)
 data class PlaylistSongCrossRef(
     val playlistId: Long,
     val songId: String,

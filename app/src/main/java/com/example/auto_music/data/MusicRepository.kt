@@ -29,14 +29,7 @@ class MusicRepository(
 
     suspend fun searchSongs(query: String): List<Song> {
         return try {
-            Log.i("MusicRepository", "Cercant a YouTube Music (Innertube Ktor) per: $query")
-            val response = Innertube.search(query)
-            
-            if (response == null) {
-                Log.e("MusicRepository", "Resposta nul·la d'Innertube")
-                return emptyList()
-            }
-
+            val response = Innertube.search(query) ?: return emptyList()
             val songs = mutableListOf<Song>()
             val contents = response.contents?.tabbedSearchResultsRenderer?.tabs?.firstOrNull()?.tabRenderer?.content?.sectionListRenderer?.contents
                 ?: response.contents?.sectionListRenderer?.contents
@@ -62,7 +55,13 @@ class MusicRepository(
                         ?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.firstOrNull()?.text ?: "Artista desconegut"
                     val thumb = renderer.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails?.lastOrNull()?.url ?: ""
                     
-                    songs.add(Song(id = videoId, title = title, artist = artist, thumbnailUrl = thumb, audioUrl = null, duration = 0))
+                    // Extract duration
+                    val lengthText = renderer.lengthText?.runs?.firstOrNull()?.text 
+                        ?: renderer.flexColumns?.getOrNull(1)?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.lastOrNull()?.text
+                    
+                    val durationSeconds = lengthText?.let { parseDuration(it) } ?: 0L
+
+                    songs.add(Song(id = videoId, title = title, artist = artist, thumbnailUrl = thumb, audioUrl = null, duration = durationSeconds))
                 }
             }
             songs
@@ -72,40 +71,46 @@ class MusicRepository(
         }
     }
 
-    suspend fun getSongById(songId: String): Song? {
-        return musicDao.getSongById(songId)
+    private fun parseDuration(text: String): Long {
+        return try {
+            val parts = text.split(":")
+            if (parts.size == 2) {
+                parts[0].toLong() * 60 + parts[1].toLong()
+            } else if (parts.size == 3) {
+                parts[0].toLong() * 3600 + parts[1].toLong() * 60 + parts[2].toLong()
+            } else 0L
+        } catch (e: Exception) { 0L }
     }
 
-    suspend fun getPlaylistById(playlistId: Long): Playlist? {
-        return musicDao.getPlaylistById(playlistId)
-    }
-
+    suspend fun getSongById(songId: String): Song? = musicDao.getSongById(songId)
+    suspend fun getPlaylistById(playlistId: Long): Playlist? = musicDao.getPlaylistById(playlistId)
+    
     suspend fun createPlaylist(name: String, isPublic: Boolean = false): Long {
         val cloudId = if (isPublic) java.util.UUID.randomUUID().toString() else null
         return musicDao.insertPlaylist(Playlist(name = name, isPublic = isPublic, cloudId = cloudId))
     }
 
     suspend fun addSongToPlaylist(song: Song, playlistId: Long) {
-        musicDao.insertSong(song)
+        val existing = musicDao.getSongById(song.id)
+        if (existing == null) {
+            musicDao.insertSong(song)
+        } else if (existing.duration == 0L && song.duration > 0) {
+            musicDao.insertSong(existing.copy(duration = song.duration))
+        }
+        
         val songsInPlaylist = musicDao.getSongsInPlaylist(playlistId).first()
         if (songsInPlaylist.none { it.id == song.id }) {
             val maxPos = musicDao.getMaxPosition(playlistId) ?: -1
             musicDao.insertSongToPlaylist(PlaylistSongCrossRef(playlistId, song.id, maxPos + 1))
         }
         
-        // Check if we should download
-        if (!song.isDownloaded) {
+        val current = musicDao.getSongById(song.id) ?: song
+        if (!current.isDownloaded) {
             val playlist = musicDao.getPlaylistById(playlistId)
             val sharedPrefs = context.getSharedPreferences("AutoMusicPrefs", Context.MODE_PRIVATE)
-            val shouldDownload = if (playlist?.isPublic == true) {
-                sharedPrefs.getBoolean("auto_download_public", true)
-            } else {
-                sharedPrefs.getBoolean("auto_download_private", true)
-            }
-            
-            if (shouldDownload) {
-                downloadSong(song)
-            }
+            val shouldDownload = if (playlist?.isPublic == true) sharedPrefs.getBoolean("auto_download_public", true)
+                                 else sharedPrefs.getBoolean("auto_download_private", true)
+            if (shouldDownload) downloadSong(current)
         }
     }
 
@@ -115,48 +120,61 @@ class MusicRepository(
 
     suspend fun removeSongFromPlaylist(song: Song, playlistId: Long) {
         musicDao.removeSongFromPlaylist(playlistId, song.id)
-        val count = musicDao.getSongOccurrenceCount(song.id)
-        if (count == 0) {
-            song.audioUrl?.let { path ->
-                try { File(path).delete() } catch (e: Exception) { }
-            }
-            musicDao.deleteSong(song)
-        }
+        cleanupOrphanedSong(song.id)
     }
 
     suspend fun deletePlaylist(playlist: Playlist) {
         val songs = musicDao.getSongsInPlaylist(playlist.id).first()
         musicDao.deletePlaylist(playlist)
-        songs.forEach { song ->
-            if (musicDao.getSongOccurrenceCount(song.id) == 0) {
-                song.audioUrl?.let { path -> try { File(path).delete() } catch (e: Exception) { } }
-                musicDao.deleteSong(song)
+        songs.forEach { cleanupOrphanedSong(it.id) }
+    }
+    
+    private suspend fun cleanupOrphanedSong(songId: String) {
+        if (musicDao.getSongOccurrenceCount(songId) == 0) {
+            val song = musicDao.getSongById(songId)
+            song?.audioUrl?.let { path ->
+                try { File(path).let { if (it.exists()) it.delete() } } catch (e: Exception) { }
             }
+            song?.let { musicDao.deleteSong(it) }
         }
     }
 
     suspend fun updateSongDownloadStatus(songId: String, localPath: String) {
-        val song = musicDao.getSongById(songId)
-        song?.let { musicDao.insertSong(it.copy(audioUrl = localPath, isDownloaded = true)) }
+        musicDao.getSongById(songId)?.let {
+            musicDao.insertSong(it.copy(audioUrl = localPath, isDownloaded = true))
+        }
     }
 
     fun getSongsInPlaylist(playlistId: Long): Flow<List<Song>> = musicDao.getSongsInPlaylist(playlistId)
 
     private fun downloadSong(song: Song) {
+        val sp = context.getSharedPreferences("downloads", Context.MODE_PRIVATE)
+        if (sp.contains("pending_${song.id}")) return
+
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val stream = com.example.auto_music.player.InnertubeResolver.resolveStream(song.id) ?: return@launch
-                val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-                val fileName = "${song.title.replace(Regex("[\\\\/:*?\"<>|]"), "_")}.mp3"
+                val fileName = "${song.id}.mp3"
+                
+                // Destination directory
+                val dir = File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "auto_music")
+                if (!dir.exists()) dir.mkdirs()
+                
+                val file = File(dir, fileName)
+                if (file.exists()) {
+                    updateSongDownloadStatus(song.id, file.absolutePath)
+                    return@launch
+                }
+
                 val request = DownloadManager.Request(Uri.parse(stream.url))
                     .setTitle("Descarregant ${song.title}")
-                    .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "auto_music/$fileName")
-                    .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                    .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, "auto_music/$fileName")
+                    .setNotificationVisibility(DownloadManager.Request.VISIBILITY_HIDDEN)
                     .addRequestHeader("User-Agent", stream.userAgent)
                     .addRequestHeader("Referer", "https://music.youtube.com/")
 
-                val downloadId = downloadManager.enqueue(request)
-                context.getSharedPreferences("downloads", Context.MODE_PRIVATE).edit().putString(downloadId.toString(), song.id).apply()
+                val downloadId = (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
+                sp.edit().putString(downloadId.toString(), song.id).putBoolean("pending_${song.id}", true).apply()
             } catch (e: Exception) {
                 Log.e("MusicRepository", "Error descàrrega: ${e.message}")
             }

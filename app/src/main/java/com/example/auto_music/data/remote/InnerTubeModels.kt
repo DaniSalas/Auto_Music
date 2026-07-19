@@ -133,7 +133,8 @@ data class MusicResponsiveListItemRenderer(
     val navigationEndpoint: NavigationEndpoint? = null,
     val flexColumns: List<FlexColumn>? = null,
     val thumbnail: ThumbnailRenderer? = null,
-    val playlistItemData: PlaylistItemData? = null
+    val playlistItemData: PlaylistItemData? = null,
+    val lengthText: Runs? = null
 )
 
 @Serializable

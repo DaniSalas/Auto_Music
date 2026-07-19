@@ -33,7 +33,7 @@ object InnertubeConstants {
     const val CLIENT_NAME = "WEB_REMIX"
     const val X_CLIENT_NAME = "67"
     const val CLIENT_VERSION = "1.20260213.01.00"
-    const val MUSIC_ITEM_RENDERER_MASK = "musicResponsiveListItemRenderer(flexColumns,fixedColumns,thumbnail,navigationEndpoint,badges)"
+    const val MUSIC_ITEM_RENDERER_MASK = "musicResponsiveListItemRenderer(flexColumns,fixedColumns,thumbnail,navigationEndpoint,badges,lengthText)"
     const val SEARCH_MASK = "contents.tabbedSearchResultsRenderer.tabs.tabRenderer.content.sectionListRenderer.contents.musicShelfRenderer(continuations,contents.$MUSIC_ITEM_RENDERER_MASK)"
 }
 

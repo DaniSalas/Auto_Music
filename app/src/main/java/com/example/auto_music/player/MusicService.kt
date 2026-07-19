@@ -99,8 +99,6 @@ class MusicService : MediaLibraryService() {
                 if (cursor != null && cursor.moveToFirst()) {
                     val statusIdx = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
                     if (statusIdx != -1 && cursor.getInt(statusIdx) == DownloadManager.STATUS_SUCCESSFUL) {
-                        // Instead of relying on local URI from cursor which might be content://
-                        // we use the path where we know we saved it
                         val dir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
                         val file = File(dir, "auto_music/$songId.mp3")
                         if (file.exists()) {
@@ -116,7 +114,7 @@ class MusicService : MediaLibraryService() {
 
     override fun onCreate() {
         super.onCreate()
-        Log.d("MusicService", "onCreate: v4.12")
+        Log.d("MusicService", "onCreate: v4.13")
         serviceScope.launch { com.example.auto_music.data.remote.Innertube.fetchVisitorData() }
         cache = PlayerCache.getInstance(applicationContext)
         val database = MusicDatabase.getDatabase(applicationContext)
@@ -152,7 +150,6 @@ class MusicService : MediaLibraryService() {
 
         player = newPlayer
         
-        // Link to activity for notification click
         val intent = Intent(this, com.example.auto_music.MainActivity::class.java)
         val pendingIntent = android.app.PendingIntent.getActivity(this, 0, intent, android.app.PendingIntent.FLAG_IMMUTABLE)
 
@@ -160,18 +157,15 @@ class MusicService : MediaLibraryService() {
             .setSessionActivity(pendingIntent)
             .build()
         
-        // Initial custom layout for the notification
-        updateCustomLayout()
-        
         ContextCompat.registerReceiver(this, downloadReceiver, IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE), ContextCompat.RECEIVER_EXPORTED)
     }
 
-    private fun updateCustomLayout() {
-        val customLayout = ImmutableList.of(
+    private fun getCustomLayout(): ImmutableList<CommandButton> {
+        return ImmutableList.of(
             CommandButton.Builder().setDisplayName("Retrocedir 10s").setSessionCommand(COMMAND_SKIP_BACK).setIconResId(androidx.media3.ui.R.drawable.exo_ic_rewind).build(),
+            CommandButton.Builder().setDisplayName("Pròxima").setPlayerCommand(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM).setIconResId(androidx.media3.ui.R.drawable.exo_ic_skip_next).build(),
             CommandButton.Builder().setDisplayName("Avançar 10s").setSessionCommand(COMMAND_SKIP_FORWARD).setIconResId(androidx.media3.ui.R.drawable.exo_ic_forward).build()
         )
-        mediaSession?.setCustomLayout(customLayout)
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = mediaSession
@@ -181,7 +175,6 @@ class MusicService : MediaLibraryService() {
         override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
             val sessionCommands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
                 .add(COMMAND_SKIP_BACK).add(COMMAND_SKIP_FORWARD)
-                // Commands needed for Android Auto browsing
                 .add(SessionCommand.COMMAND_CODE_LIBRARY_GET_CHILDREN)
                 .add(SessionCommand.COMMAND_CODE_LIBRARY_GET_ITEM)
                 .add(SessionCommand.COMMAND_CODE_LIBRARY_GET_LIBRARY_ROOT)
@@ -194,6 +187,10 @@ class MusicService : MediaLibraryService() {
                 .add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM).add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
                 .add(Player.COMMAND_SEEK_FORWARD).add(Player.COMMAND_SEEK_BACK)
                 .add(Player.COMMAND_GET_TIMELINE).build()
+
+            serviceScope.launch {
+                mediaSession?.setCustomLayout(getCustomLayout())
+            }
 
             return MediaSession.ConnectionResult.accept(sessionCommands, playerCommands)
         }
@@ -244,7 +241,7 @@ class MusicService : MediaLibraryService() {
                 .setIsPlayable(false)
                 .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
                 .setExtras(Bundle().apply { 
-                    putInt("android.media.browse.CONTENT_STYLE_BROWSABLE_HINT", 1) // List view
+                    putInt("android.media.browse.CONTENT_STYLE_BROWSABLE_HINT", 1) 
                     putInt("android.media.browse.CONTENT_STYLE_PLAYABLE_HINT", 1) 
                 }).build()
             return Futures.immediateFuture(LibraryResult.ofItem(MediaItem.Builder().setMediaId("ROOT").setMediaMetadata(rootMetadata).build(), params))
@@ -274,8 +271,8 @@ class MusicService : MediaLibraryService() {
                         val songs = repository.getSongsInPlaylist(playlistId).first()
                         val items = songs.map { createMediaItem(it, playlistId) }
                         future.set(LibraryResult.ofItemList(items, params))
-                    } else future.set(LibraryResult.ofError(LibraryResult.RESULT_ERROR_BAD_VALUE))
-                } catch (e: Exception) { future.set(LibraryResult.ofError(LibraryResult.RESULT_ERROR_UNKNOWN)) }
+                    } else future.set(LibraryResult.ofError(SessionError.ERROR_BAD_VALUE))
+                } catch (e: Exception) { future.set(LibraryResult.ofError(SessionError.ERROR_UNKNOWN)) }
             }
             return future
         }

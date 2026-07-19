@@ -86,6 +86,7 @@ dependencies {
 
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.10.1")
 
     // Firebase for syncing
     implementation(platform("com.google.firebase:firebase-bom:33.9.0"))

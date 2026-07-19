@@ -7,7 +7,9 @@ import androidx.room.PrimaryKey
 data class Playlist(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
-    val description: String = ""
+    val description: String = "",
+    val isPublic: Boolean = false,
+    val cloudId: String? = null // Used for syncing public playlists across different users
 )
 
 @Entity(tableName = "playlist_song_cross_ref", primaryKeys = ["playlistId", "songId"])

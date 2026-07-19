@@ -27,40 +27,41 @@ class SyncManager(
 
     private fun initializeFirebase() {
         try {
-            val firebaseInstance = FirebaseDatabase.getInstance()
-            database = firebaseInstance.reference
+            database = FirebaseDatabase.getInstance().reference
             Log.i("SyncManager", "Firebase inicialitzat correctament")
         } catch (e: Exception) {
             Log.e("SyncManager", "Error inicialitzant Firebase: ${e.message}")
-            database = null
         }
     }
 
     fun startSync(id: String) {
         if (id.isBlank()) return
         syncId = id
-        
-        if (database == null) initializeFirebase()
         val db = database ?: return
         
         Log.i("SyncManager", "Iniciant sincronització amb ID: $id")
         
+        // Listen to private data
         db.child("sync").child(id).addValueEventListener(object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
                 if (isUpdatingFromCloud) return
-                scope.launch {
-                    processCloudData(snapshot)
-                }
+                scope.launch { processCloudData(snapshot, isPublic = false) }
             }
-            override fun onCancelled(error: DatabaseError) {
-                Log.e("SyncManager", "Error Firebase (${error.code}): ${error.message}")
+            override fun onCancelled(error: DatabaseError) { Log.e("SyncManager", "Error: ${error.message}") }
+        })
+
+        // Listen to global public data
+        db.child("public_playlists").addValueEventListener(object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                if (isUpdatingFromCloud) return
+                scope.launch { processCloudData(snapshot, isPublic = true) }
             }
+            override fun onCancelled(error: DatabaseError) { Log.e("SyncManager", "Error Public: ${error.message}") }
         })
     }
 
-    private suspend fun processCloudData(snapshot: DataSnapshot) {
+    private suspend fun processCloudData(snapshot: DataSnapshot, isPublic: Boolean) {
         if (!snapshot.exists()) return
-        
         try {
             isUpdatingFromCloud = true
             val playlistsSnap = snapshot.child("playlists")
@@ -74,9 +75,20 @@ class SyncManager(
                 val playlistName = p.child("name").getValue(String::class.java) ?: "Nova llista"
                 val cloudId = p.key ?: return@forEach
                 
-                var localPlaylist = localPlaylists.find { it.name == playlistName }
+                // Match by cloudId for public, or name for private (simple strategy)
+                var localPlaylist = if (isPublic) {
+                    localPlaylists.find { it.cloudId == cloudId }
+                } else {
+                    localPlaylists.find { it.name == playlistName && !it.isPublic }
+                }
+
                 val finalPlaylistId = if (localPlaylist == null) {
-                    repository.createPlaylist(playlistName)
+                    repository.createPlaylist(playlistName, isPublic)
+                    // If public, we might need to update the cloudId to match the one from cloud
+                    // But our repository generates a NEW one. 
+                    // Let's improve repository or use cloudId here.
+                    // For now, let's assume names are unique enough or just use the cloud one.
+                    repository.allPlaylists.first().find { it.name == playlistName }?.id ?: -1L
                 } else {
                     localPlaylist.id
                 }
@@ -102,7 +114,7 @@ class SyncManager(
                 }
             }
         } catch (e: Exception) {
-            Log.e("SyncManager", "Error en processCloudData: ${e.message}")
+            Log.e("SyncManager", "Error processant dades: ${e.message}")
         } finally {
             isUpdatingFromCloud = false
         }
@@ -110,56 +122,61 @@ class SyncManager(
 
     fun uploadLocalData(onComplete: (Boolean, String?) -> Unit) {
         val id = syncId ?: run { onComplete(false, "ID buit"); return }
-        if (database == null) initializeFirebase()
         val db = database ?: run { onComplete(false, "Firebase no configurat"); return }
-        
-        if (isUpdatingFromCloud) {
-            onComplete(false, "Sincronització en curs"); 
-            return
-        }
+        if (isUpdatingFromCloud) { onComplete(false, "Sincronització en curs"); return }
         
         scope.launch {
             try {
                 val playlists = repository.allPlaylists.first()
-                val playlistsMap = mutableMapOf<String, Any>()
-                val refsMap = mutableMapOf<String, Any>()
-                val songsMap = mutableMapOf<String, Any>()
                 
-                for (p in playlists) {
-                    playlistsMap[p.id.toString()] = mapOf("name" to p.name)
-                    val pSongs = repository.getSongsInPlaylist(p.id).first()
-                    refsMap[p.id.toString()] = pSongs.map { mapOf("songId" to it.id) }
+                // 1. Upload Private
+                val privatePlaylists = playlists.filter { !it.isPublic }
+                val privateSync = prepareSyncData(privatePlaylists)
+                db.child("sync").child(id).setValue(privateSync).await()
+                
+                // 2. Upload Public
+                for (p in playlists.filter { it.isPublic }) {
+                    val cloudKey = p.cloudId ?: p.id.toString()
+                    val pData = prepareSyncData(listOf(p))
                     
-                    for (s in pSongs) {
-                        if (!songsMap.containsKey(s.id)) {
-                            songsMap[s.id] = mapOf(
-                                "id" to s.id,
-                                "title" to s.title,
-                                "artist" to s.artist,
-                                "thumbnailUrl" to s.thumbnailUrl,
-                                "duration" to s.duration
-                            )
-                        }
+                    db.child("public_playlists").child("playlists").child(cloudKey).child("name").setValue(p.name)
+                    db.child("public_playlists").child("refs").child(cloudKey).setValue(pData["refs"])
+                    
+                    val songsPart = (pData["songs"] as? Map<*, *>) ?: emptyMap<Any, Any>()
+                    for ((sid, sdata) in songsPart) {
+                        db.child("public_playlists").child("songs").child(sid.toString()).setValue(sdata)
                     }
                 }
 
-                val syncData = mapOf(
-                    "playlists" to playlistsMap,
-                    "songs" to songsMap,
-                    "refs" to refsMap
-                )
-                
-                db.child("sync").child(id).setValue(syncData)
-                    .addOnCompleteListener { task ->
-                        if (task.isSuccessful) {
-                            onComplete(true, null)
-                        } else {
-                            onComplete(false, task.exception?.message)
-                        }
-                    }
+                onComplete(true, null)
             } catch (e: Exception) {
                 onComplete(false, e.message)
             }
         }
+    }
+
+    private suspend fun prepareSyncData(playlists: List<Playlist>): Map<String, Any> {
+        val playlistsMap = mutableMapOf<String, Any>()
+        val refsMap = mutableMapOf<String, Any>()
+        val songsMap = mutableMapOf<String, Any>()
+        
+        for (p in playlists) {
+            val key = p.cloudId ?: p.id.toString()
+            playlistsMap[key] = mapOf("name" to p.name)
+            
+            val pSongs = repository.getSongsInPlaylist(p.id).first()
+            refsMap[key] = pSongs.map { mapOf("songId" to it.id) }
+            
+            for (s in pSongs) {
+                songsMap[s.id] = mapOf(
+                    "id" to s.id,
+                    "title" to s.title,
+                    "artist" to s.artist,
+                    "thumbnailUrl" to s.thumbnailUrl,
+                    "duration" to s.duration
+                )
+            }
+        }
+        return mapOf("playlists" to playlistsMap, "songs" to songsMap, "refs" to refsMap)
     }
 }

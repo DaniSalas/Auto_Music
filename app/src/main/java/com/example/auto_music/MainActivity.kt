@@ -156,6 +156,14 @@ fun MainApp(
         mutableLongStateOf(sharedPrefs.getLong("bg_color", Color(0xFFF9F6F0).toArgb().toLong()))
     }
 
+    var autoDownloadPublic by remember {
+        mutableStateOf(sharedPrefs.getBoolean("auto_download_public", true))
+    }
+
+    var autoDownloadPrivate by remember {
+        mutableStateOf(sharedPrefs.getBoolean("auto_download_private", true))
+    }
+
     var syncId by remember {
         mutableStateOf(sharedPrefs.getString("sync_id", "") ?: "")
     }
@@ -296,6 +304,7 @@ fun MainApp(
                             })
                             1 -> PlaylistsScreen(
                                 viewModel = viewModel, 
+                                strings = strings,
                                 onPlaylistClick = { playlist -> selectedPlaylist = playlist },
                                 onManualSync = { 
                                     if (syncId.isNotBlank()) {
@@ -328,9 +337,19 @@ fun MainApp(
                                 backgroundColor = Color(backgroundColor.toInt()),
                                 isDarkTheme = isDarkTheme,
                                 syncId = syncId,
+                                autoDownloadPublic = autoDownloadPublic,
+                                autoDownloadPrivate = autoDownloadPrivate,
                                 onSyncIdChange = {
                                     syncId = it
                                     sharedPrefs.edit().putString("sync_id", it).apply()
+                                },
+                                onAutoDownloadPublicChange = {
+                                    autoDownloadPublic = it
+                                    sharedPrefs.edit().putBoolean("auto_download_public", it).apply()
+                                },
+                                onAutoDownloadPrivateChange = {
+                                    autoDownloadPrivate = it
+                                    sharedPrefs.edit().putBoolean("auto_download_private", it).apply()
                                 },
                                 onDarkThemeChange = onDarkThemeChange,
                                 onColorChange = { color ->
@@ -414,7 +433,11 @@ fun ConfigScreen(
     backgroundColor: Color, 
     isDarkTheme: Boolean,
     syncId: String,
+    autoDownloadPublic: Boolean,
+    autoDownloadPrivate: Boolean,
     onSyncIdChange: (String) -> Unit,
+    onAutoDownloadPublicChange: (Boolean) -> Unit,
+    onAutoDownloadPrivateChange: (Boolean) -> Unit,
     onDarkThemeChange: (Boolean) -> Unit,
     onColorChange: (Color) -> Unit
 ) {
@@ -426,6 +449,19 @@ fun ConfigScreen(
             Text(strings.darkMode, style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.weight(1f))
             Switch(checked = isDarkTheme, onCheckedChange = onDarkThemeChange)
+        }
+
+        Spacer(Modifier.height(24.dp))
+        Text(strings.autoDownloadTitle, style = MaterialTheme.typography.titleMedium)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(strings.autoDownloadPrivate)
+            Spacer(Modifier.weight(1f))
+            Switch(checked = autoDownloadPrivate, onCheckedChange = onAutoDownloadPrivateChange)
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(strings.autoDownloadPublic)
+            Spacer(Modifier.weight(1f))
+            Switch(checked = autoDownloadPublic, onCheckedChange = onAutoDownloadPublicChange)
         }
 
         Spacer(Modifier.height(24.dp))
@@ -537,7 +573,14 @@ data class AppTranslations(
     val generate: String,
     val deletePlaylist: String,
     val syncSuccess: String,
-    val syncError: String
+    val syncError: String,
+    val autoDownloadTitle: String,
+    val autoDownloadPrivate: String,
+    val autoDownloadPublic: String,
+    val isPublic: String,
+    val isPrivate: String,
+    val createPublic: String,
+    val createPrivate: String
 )
 
 fun getTranslations(lang: String): AppTranslations {
@@ -547,70 +590,90 @@ fun getTranslations(lang: String): AppTranslations {
             "If you liked my application you can donate the amount you consider.",
             "Select background color", "Close", "Brightness", "Preview", "Dark Mode", "Custom color is disabled in Dark Mode",
             "Cloud Synchronization", "Sync ID", "Use the same ID on all devices to share your playlists.", "Generate",
-            "Delete Playlist", "Synchronization successful", "Synchronization error"
+            "Delete Playlist", "Synchronization successful", "Synchronization error",
+            "Automatic Downloads", "Private Playlists", "Public Playlists",
+            "Public", "Private", "Create Public", "Create Private"
         )
         "CATALA" -> AppTranslations(
             "Cerca", "Llistes", "Idioma", "Configuració", "Donació",
             "Si t'ha agradat la meva aplicació pots fer una donació amb l'import que consideris.",
             "Selecciona el color de fons", "Tancar", "Brillantor", "Vista prèvia", "Mode fosc", "El color personalitzat es desactiva en mode fosc",
             "Sincronització al Núvol", "ID de Sincronització", "Utilitza el mateix ID en tots els dispositius per compartir les teves llistes.", "Generar",
-            "Eliminar llista", "Sincronització correcta", "Error en la sincronització"
+            "Eliminar llista", "Sincronització correcta", "Error en la sincronització",
+            "Descàrregues Automàtiques", "Llistes Privades", "Llistes Públiques",
+            "Pública", "Privada", "Crea Pública", "Crea Privada"
         )
         "GALEGO" -> AppTranslations(
             "Cerca", "Listas", "Lingua", "Configuración", "Doazón",
             "Se che gustou a miña aplicació podes doar o importe que consideres.",
             "Selecciona a cor de fondo", "Pechar", "Brillo", "Vista previa", "Modo escuro", "A cor personalizada desactívase no modo escuro",
             "Sincronización na Nube", "ID de Sincronización", "Usa o mesmo ID en todos os teus dispositivos.", "Xerar",
-            "Eliminar lista", "Sincronización correcta", "Error na sincronización"
+            "Eliminar lista", "Sincronización correcta", "Error na sincronización",
+            "Descargas Automáticas", "Listas Privadas", "Listas Públicas",
+            "Pública", "Privada", "Crear Pública", "Crear Privada"
         )
         "EUSKARA" -> AppTranslations(
             "Bilatu", "Zerrendak", "Hizkuntza", "Konfigurazioa", "Dohaintza",
             "Nire aplikazioa gustatu bazaizu, nahi duzun zenbatekoa eman dezakezu.",
             "Hautatu atzeko planoko kolorea", "Itxi", "Distira", "Aurreikuspena", "Modu iluna", "Kolore pertsonalizatua desgaituta dago modu ilunean",
             "Hodeiko Sinkronizazioa", "Sinkronizazio IDa", "Erabili ID bera gailu guztietan.", "Sortu",
-            "Zerrenda ezabatu", "Sinkronizazio arrakastatsua", "Errorea sinkronizatzean"
+            "Zerrenda ezabatu", "Sinkronizazio arrakastatsua", "Errorea sinkronizatzean",
+            "Deskarga Automatikoak", "Zerrenda Pribatuak", "Zerrenda Publikoak",
+            "Publikoa", "Pribatua", "Publikoa Sortu", "Pribatua Sortu"
         )
         "FRANCAIS" -> AppTranslations(
             "Recherche", "Listes", "Langue", "Configuration", "Don",
             "Si vous avez aimé mon application, vous pouvez donner le montant que vous considérez.",
             "Sélectionnez la couleur de fondo", "Fermer", "Luminosité", "Aperçu", "Mode sombre", "La couleur personalizada est désactivée en mode sombre",
             "Synchronisation Cloud", "ID de Synchro", "Utilisez le même ID sur tous vos appareils.", "Générer",
-            "Supprimer la liste", "Synchronisation réussie", "Erreur de synchronización"
+            "Supprimer la liste", "Synchronisation réussie", "Erreur de synchronización",
+            "Téléchargements Automatiques", "Listes Privées", "Listes Publiques",
+            "Publique", "Privée", "Créer Publique", "Créer Privée"
         )
         "DEUTSCH" -> AppTranslations(
             "Suche", "Listen", "Sprache", "Konfiguration", "Spende",
             "Wenn Ihnen meine App gefallen hat, können Sie den von Ihnen gewünschten Betrag spenden.",
             "Hintergrundfarbe auswählen", "Schließen", "Helligkeit", "Vorschau", "Dunkelmodus", "Benutzerdefinierte Farbe ist im Dunkelmodus deaktiviert",
             "Cloud-Synchronisation", "Sync-ID", "Verwenden Sie dieselbe ID auf allen Geräten.", "Generieren",
-            "Wiedergabeliste löschen", "Synchronisierung erfolgreich", "Synchronisierungsfehler"
+            "Wiedergabeliste löschen", "Synchronisierung erfolgreich", "Synchronisierungsfehler",
+            "Automatische Downloads", "Private Playlists", "Öffentliche Playlists",
+            "Öffentlich", "Privat", "Öffentlich Erstellen", "Privat Erstellen"
         )
         "ITALIANO" -> AppTranslations(
             "Cerca", "Liste", "Lingua", "Configurazione", "Donazione",
             "Se ti è piaciuta la mia app, puedes donare l'importo que consideri.",
             "Seleziona el colore dello sfondo", "Chiudi", "Luminosità", "Anteprima", "Modalità scura", "Il colore personalizado è disabilitato in modalidad scura",
-            "Sincronizzazione Cloud", "ID Sincronizzazione", "Usa lo mismo ID en todos los dispositivos.", "Genera",
-            "Elimina playlist", "Sincronizzazione riuscita", "Errore di sincronizzazione"
+            "Sincronizzazione Cloud", "ID Sincronizzazione", "Usa lo stesso ID su tutti i dispositivos.", "Genera",
+            "Elimina playlist", "Sincronizzazione riuscita", "Errore di sincronizzazione",
+            "Download Automatici", "Playlist Private", "Playlist Pubbliche",
+            "Pubblica", "Privata", "Crea Pubblica", "Crea Privata"
         )
         "KOREAN" -> AppTranslations(
             "검색", "재생 목록", "언어", "설정", "기부",
             "내 애플리케이션이 마음에 들면 원하는 금액을 기부할 수 있습니다.",
             "배경색 선택", "닫기", "밝기", "미리보기", "다크 모드", "다크 모드에서는 사용자 정의 색상이 비활성화됩니다.",
             "클라우드 동기화", "동기화 ID", "모든 장치에서 동일한 ID를 사용하여 재생 목록을 공유하십시오.", "생성",
-            "재생 목록 삭제", "동기화 성공", "동기화 오류"
+            "재생 목록 삭제", "동기화 성공", "동기화 오류",
+            "자동 다운로드", "개인 재생 목록", "공개 재생 목록",
+            "공개", "비공개", "공개 생성", "비공개 생성"
         )
         "JAPANESE" -> AppTranslations(
             "検索", "プレイリスト", "言語", "設定", "寄付",
             "私のアプリケーションが気に入ったら、検討している金額を寄付できます。",
             "背景色を選択", "閉じる", "明るさ", "プレビュー", "ダークモード", "ダークモードではカスタムカラーが無効になります",
             "クラウド同期", "同期ID", "すべてのデバイスで同じIDを使用してプレイリストを共有します。", "生成",
-            "プレイリストを削除", "同期に成功しました", "同期エラー"
+            "プレイリストを削除", "同期に成功しました", "同期エラー",
+            "自動ダウンロード", "プライベートプレイリスト", "公開プレイリスト",
+            "公開", "秘密", "公開作成", "秘密作成"
         )
         else -> AppTranslations( // ESPANOL
             "Buscar", "Listas", "Idioma", "Configuración", "Donación",
             "Si te gustó mi aplicación puedes donar la cantidad que consideres.",
             "Selecciona el color de fondo", "Cerrar", "Brillo", "Vista previa", "Modo oscuro", "El color personalizado se desactiva en modo oscuro",
             "Sincronización en la Nube", "ID de Sincronización", "Usa el mismo ID en todos tus dispositivos para compartir tus listas.", "Generar",
-            "Eliminar lista", "Sincronización correcta", "Error en la sincronización"
+            "Eliminar lista", "Sincronización correcta", "Error en la sincronización",
+            "Descargas Automáticas", "Listas Privadas", "Listas Públicas",
+            "Pública", "Privada", "Crear Pública", "Crear Privada"
         )
     }
 }

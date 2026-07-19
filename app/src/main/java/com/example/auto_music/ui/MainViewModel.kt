@@ -40,9 +40,9 @@ class MainViewModel(private val repository: MusicRepository) : ViewModel() {
         }
     }
 
-    fun createPlaylist(name: String) {
+    fun createPlaylist(name: String, isPublic: Boolean = false) {
         viewModelScope.launch {
-            repository.createPlaylist(name)
+            repository.createPlaylist(name, isPublic)
         }
     }
 

@@ -120,7 +120,7 @@ class MusicService : MediaLibraryService() {
 
     override fun onCreate() {
         super.onCreate()
-        Log.d("MusicService", "onCreate: v4.7")
+        Log.d("MusicService", "onCreate: v4.8")
         serviceScope.launch { com.example.auto_music.data.remote.Innertube.fetchVisitorData() }
         cache = PlayerCache.getInstance(applicationContext)
         val database = MusicDatabase.getDatabase(applicationContext)
@@ -134,6 +134,33 @@ class MusicService : MediaLibraryService() {
             .setHandleAudioBecomingNoisy(true)
             .build()
         
+        newPlayer.addListener(object : Player.Listener {
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                mediaItem?.let { item ->
+                    val playlistId = item.mediaMetadata.extras?.getString("playlistId")?.toLongOrNull()
+                    if (playlistId != null) {
+                        serviceScope.launch {
+                            repository.updatePlaylistPlaybackState(playlistId, item.mediaId, 0L)
+                        }
+                    }
+                }
+            }
+        })
+        
+        // Periodic position save
+        serviceScope.launch {
+            while (isActive) {
+                delay(5000)
+                if (newPlayer.isPlaying) {
+                    val item = newPlayer.currentMediaItem
+                    val playlistId = item?.mediaMetadata?.extras?.getString("playlistId")?.toLongOrNull()
+                    if (playlistId != null) {
+                        repository.updatePlaylistPlaybackState(playlistId, item.mediaId, newPlayer.currentPosition)
+                    }
+                }
+            }
+        }
+
         player = newPlayer
         mediaSession = MediaLibrarySession.Builder(this, newPlayer, LibrarySessionCallback()).build()
         ContextCompat.registerReceiver(this, downloadReceiver, IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE), ContextCompat.RECEIVER_EXPORTED)
@@ -154,6 +181,8 @@ class MusicService : MediaLibraryService() {
             val playerCommands = MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS.buildUpon()
                 .add(Player.COMMAND_SEEK_TO_NEXT)
                 .add(Player.COMMAND_SEEK_TO_PREVIOUS)
+                .add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+                .add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
                 .add(Player.COMMAND_SEEK_FORWARD)
                 .add(Player.COMMAND_SEEK_BACK)
                 .add(Player.COMMAND_PLAY_PAUSE)
@@ -185,7 +214,16 @@ class MusicService : MediaLibraryService() {
                     val songs = repository.getSongsInPlaylist(playlistId).first()
                     val items = songs.map { createMediaItem(it, playlistId) }
                     val index = songs.indexOfFirst { it.id == firstItem.mediaId }.coerceAtLeast(0)
-                    future.set(MediaSession.MediaItemsWithStartPosition(items, index, startPositionMs))
+                    
+                    // User requested to continue from last position if possible
+                    val playlist = repository.getPlaylistById(playlistId)
+                    val finalPosition = if (playlist?.lastPlayedSongId == firstItem.mediaId) {
+                        playlist.lastPlayedPositionMs
+                    } else {
+                        startPositionMs
+                    }
+
+                    future.set(MediaSession.MediaItemsWithStartPosition(items, index, finalPosition))
                 } else {
                     val updated = mediaItems.map { 
                         if (it.mediaId.length > 5 && !it.mediaId.startsWith("PLAYLIST_")) {
@@ -235,8 +273,7 @@ class MusicService : MediaLibraryService() {
                     putInt("android.media.browse.CONTENT_STYLE_PLAYABLE_HINT", 1)
                 }).build()
 
-            val rootItem = MediaItem.Builder().setMediaId("ROOT").setMediaMetadata(rootMetadata).build()
-            return Futures.immediateFuture(LibraryResult.ofItem(rootItem, params))
+            return Futures.immediateFuture(LibraryResult.ofItem(MediaItem.Builder().setMediaId("ROOT").setMediaMetadata(rootMetadata).build(), params))
         }
 
         override fun onGetChildren(session: MediaLibrarySession, browser: MediaSession.ControllerInfo, parentId: String, page: Int, pageSize: Int, params: LibraryParams?): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {

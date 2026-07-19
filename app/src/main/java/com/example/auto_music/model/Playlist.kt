@@ -10,7 +10,9 @@ data class Playlist(
     val name: String,
     val description: String = "",
     val isPublic: Boolean = false,
-    val cloudId: String? = null
+    val cloudId: String? = null,
+    val lastPlayedSongId: String? = null,
+    val lastPlayedPositionMs: Long = 0
 )
 
 @Entity(

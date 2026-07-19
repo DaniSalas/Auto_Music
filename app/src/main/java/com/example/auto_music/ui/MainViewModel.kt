@@ -83,4 +83,10 @@ class MainViewModel(
             repository.updateSongOrder(playlistId, songs)
         }
     }
+
+    fun updatePlaylistPlaybackState(playlistId: Long, songId: String?, position: Long) {
+        viewModelScope.launch {
+            repository.updatePlaylistPlaybackState(playlistId, songId, position)
+        }
+    }
 }

@@ -41,6 +41,9 @@ interface MusicDao {
     @Query("SELECT MAX(position) FROM playlist_song_cross_ref WHERE playlistId = :playlistId")
     suspend fun getMaxPosition(playlistId: Long): Int?
 
+    @Query("UPDATE playlists SET lastPlayedSongId = :songId, lastPlayedPositionMs = :position WHERE id = :playlistId")
+    suspend fun updatePlaylistPlaybackState(playlistId: Long, songId: String?, position: Long)
+
     @Delete
     suspend fun deletePlaylist(playlist: Playlist)
 

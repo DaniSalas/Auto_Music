@@ -84,6 +84,10 @@ class MusicRepository(
     suspend fun getSongById(songId: String): Song? = musicDao.getSongById(songId)
     suspend fun getPlaylistById(playlistId: Long): Playlist? = musicDao.getPlaylistById(playlistId)
     
+    suspend fun updatePlaylistPlaybackState(playlistId: Long, songId: String?, position: Long) {
+        musicDao.updatePlaylistPlaybackState(playlistId, songId, position)
+    }
+
     suspend fun createPlaylist(name: String, isPublic: Boolean = false, cloudId: String? = null): Long {
         val playlists = musicDao.getAllPlaylists().first()
         // Anti-duplicate check: match by cloudId if provided, or name+privacy

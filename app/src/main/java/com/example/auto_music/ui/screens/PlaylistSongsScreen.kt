@@ -6,6 +6,7 @@ import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
@@ -24,6 +25,7 @@ import com.example.auto_music.model.Playlist
 import com.example.auto_music.model.Song
 import com.example.auto_music.ui.MainViewModel
 import com.example.auto_music.AppTranslations
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -39,10 +41,22 @@ fun PlaylistSongsScreen(
     
     val selectedSongs = remember { mutableStateListOf<Song>() }
     val isSelectionMode by remember { derivedStateOf { selectedSongs.isNotEmpty() } }
+    val listState = rememberLazyListState()
+    val coroutineScope = rememberCoroutineScope()
 
     LaunchedEffect(initialSongs) {
         if (songs.isEmpty() || songs.size != initialSongs.size) {
             songs = initialSongs
+            
+            // Auto-scroll to last played song
+            if (playlist.lastPlayedSongId != null) {
+                val index = songs.indexOfFirst { it.id == playlist.lastPlayedSongId }
+                if (index != -1) {
+                    coroutineScope.launch {
+                        listState.animateScrollToItem(index)
+                    }
+                }
+            }
         }
     }
 
@@ -88,7 +102,10 @@ fun PlaylistSongsScreen(
         var initialIndex by remember { mutableStateOf<Int?>(null) }
         var totalDragOffsetY by remember { mutableFloatStateOf(0f) }
 
-        LazyColumn(modifier = Modifier.padding(padding).fillMaxSize().padding(horizontal = 16.dp)) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.padding(padding).fillMaxSize().padding(horizontal = 16.dp)
+        ) {
             itemsIndexed(songs, key = { _, song -> song.id }) { index, song ->
                 val isDragging = draggedItemIndex == index
                 val isSelected = selectedSongs.contains(song)

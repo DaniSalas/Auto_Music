@@ -4,11 +4,10 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
     <!-- AM concatenadas simbióticas -->
-    <!-- Fondo azul ya está en background.xml -->
     <!-- Letra A alta -->
     <!-- Letra M con primer ángulo más bajo para simular montaña -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M25,80 L40,25 L55,80 M32,65 L48,65
+        android:pathData="M20,80 L40,20 L60,80 M30,65 L50,65
                           M55,80 L65,45 L75,55 L85,35 L95,80" />
 </vector>

@@ -299,19 +299,19 @@ fun MainApp(
                                 onPlaylistClick = { playlist -> selectedPlaylist = playlist },
                                 onManualSync = { 
                                     if (syncId.isNotBlank()) {
-                                        Toast.makeText(context, "Iniciant sincronització...", Toast.LENGTH_SHORT).show()
-                                        syncManager.uploadLocalData { success ->
-                                            // Assegurem que el Toast es mostra en el fil de la UI
+                                        Toast.makeText(context, "Sincronitzant...", Toast.LENGTH_SHORT).show()
+                                        syncManager.uploadLocalData { success, error ->
                                             scope.launch(kotlinx.coroutines.Dispatchers.Main) {
                                                 if (success) {
                                                     Toast.makeText(context, strings.syncSuccess, Toast.LENGTH_LONG).show()
                                                 } else {
-                                                    Toast.makeText(context, strings.syncError + " (Verifica Firebase)", Toast.LENGTH_LONG).show()
+                                                    val msg = error ?: strings.syncError
+                                                    Toast.makeText(context, "Error: $msg", Toast.LENGTH_LONG).show()
                                                 }
                                             }
                                         }
                                     } else {
-                                        Toast.makeText(context, "Posa un ID a Configuració", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, "Configura un ID de sincronització primer", Toast.LENGTH_SHORT).show()
                                     }
                                 }
                             )

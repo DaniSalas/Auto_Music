@@ -93,7 +93,9 @@ class MainActivity : ComponentActivity() {
                 val viewModel: MainViewModel = viewModel(factory = object : androidx.lifecycle.ViewModelProvider.Factory {
                     override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
                         @Suppress("UNCHECKED_CAST")
-                        return MainViewModel(repository) as T
+                        val vm = MainViewModel(repository)
+                        vm.setSyncManager(syncManager)
+                        return vm as T
                     }
                 })
 

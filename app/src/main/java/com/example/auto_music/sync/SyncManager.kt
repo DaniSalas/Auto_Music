@@ -75,7 +75,6 @@ class SyncManager(
                 val playlistName = p.child("name").getValue(String::class.java) ?: "Nova llista"
                 val cloudId = p.key ?: return@forEach
                 
-                // Search by cloudId for public lists, or name for private
                 var localPlaylist = if (isPublic) {
                     localPlaylists.find { it.cloudId == cloudId }
                 } else {
@@ -83,7 +82,6 @@ class SyncManager(
                 }
 
                 val finalPlaylistId = if (localPlaylist == null) {
-                    // Create playlist using the EXACT cloudId from Firebase to avoid future duplicates
                     repository.createPlaylist(playlistName, isPublic, cloudId)
                 } else {
                     localPlaylist.id
@@ -125,12 +123,12 @@ class SyncManager(
             try {
                 val playlists = repository.allPlaylists.first()
                 
-                // 1. Upload Private
+                // 1. Upload Private (Full overwrite for the specific sync ID)
                 val privatePlaylists = playlists.filter { !it.isPublic }
                 val privateSync = prepareSyncData(privatePlaylists)
                 db.child("sync").child(id).setValue(privateSync).await()
                 
-                // 2. Upload Public
+                // 2. Upload Public (Incremental update)
                 for (p in playlists.filter { it.isPublic }) {
                     val cloudKey = p.cloudId ?: p.id.toString()
                     val pData = prepareSyncData(listOf(p))
@@ -151,13 +149,39 @@ class SyncManager(
         }
     }
 
+    fun deleteCloudPlaylist(playlist: Playlist) {
+        val db = database ?: return
+        val id = syncId ?: return
+        
+        scope.launch {
+            try {
+                if (playlist.isPublic) {
+                    val cloudKey = playlist.cloudId ?: playlist.id.toString()
+                    // Delete from global public section
+                    db.child("public_playlists").child("playlists").child(cloudKey).removeValue()
+                    db.child("public_playlists").child("refs").child(cloudKey).removeValue()
+                    Log.d("SyncManager", "Llista pública eliminada de Firebase: $cloudKey")
+                } else {
+                    // For private, we can either re-upload everything or just remove the node
+                    // Given our private structure is /sync/{id}/playlists/{localId}
+                    // But wait, the uploadLocalData uses local IDs as keys for private
+                    db.child("sync").child(id).child("playlists").child(playlist.id.toString()).removeValue()
+                    db.child("sync").child(id).child("refs").child(playlist.id.toString()).removeValue()
+                    Log.d("SyncManager", "Llista privada eliminada de Firebase: ${playlist.id}")
+                }
+            } catch (e: Exception) {
+                Log.e("SyncManager", "Error eliminant llista del núvol: ${e.message}")
+            }
+        }
+    }
+
     private suspend fun prepareSyncData(playlists: List<Playlist>): Map<String, Any> {
         val playlistsMap = mutableMapOf<String, Any>()
         val refsMap = mutableMapOf<String, Any>()
         val songsMap = mutableMapOf<String, Any>()
         
         for (p in playlists) {
-            val key = p.cloudId ?: p.id.toString()
+            val key = if (p.isPublic) (p.cloudId ?: p.id.toString()) else p.id.toString()
             playlistsMap[key] = mapOf("name" to p.name)
             
             val pSongs = repository.getSongsInPlaylist(p.id).first()

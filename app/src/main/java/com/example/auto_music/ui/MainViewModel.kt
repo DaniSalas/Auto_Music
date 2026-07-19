@@ -5,12 +5,15 @@ import androidx.lifecycle.viewModelScope
 import com.example.auto_music.data.MusicRepository
 import com.example.auto_music.model.Playlist
 import com.example.auto_music.model.Song
+import com.example.auto_music.sync.SyncManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
-class MainViewModel(private val repository: MusicRepository) : ViewModel() {
+class MainViewModel(
+    private val repository: MusicRepository
+) : ViewModel() {
 
     private val _searchResults = MutableStateFlow<List<Song>>(emptyList())
     val searchResults: StateFlow<List<Song>> = _searchResults.asStateFlow()
@@ -21,10 +24,15 @@ class MainViewModel(private val repository: MusicRepository) : ViewModel() {
     private val _playlists = MutableStateFlow<List<Playlist>>(emptyList())
     val playlists: StateFlow<List<Playlist>> = _playlists.asStateFlow()
 
+    private var syncManager: SyncManager? = null
+
+    fun setSyncManager(sm: SyncManager) {
+        syncManager = sm
+    }
+
     init {
         viewModelScope.launch {
             repository.allPlaylists.collect {
-                android.util.Log.d("MainViewModel", "Playlists updated: ${it.size}")
                 _playlists.value = it
             }
         }
@@ -64,6 +72,8 @@ class MainViewModel(private val repository: MusicRepository) : ViewModel() {
 
     fun deletePlaylist(playlist: Playlist) {
         viewModelScope.launch {
+            // Delete from cloud first if sync manager is available
+            syncManager?.deleteCloudPlaylist(playlist)
             repository.deletePlaylist(playlist)
         }
     }

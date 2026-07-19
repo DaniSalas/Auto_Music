@@ -91,11 +91,13 @@ class MusicRepository(
     }
 
     suspend fun addSongToPlaylist(song: Song, playlistId: Long) {
-        val existing = musicDao.getSongById(song.id)
-        if (existing == null) {
+        Log.d("MusicRepository", "Afegint cançó ${song.title} a la llista $playlistId")
+        // First, check if we already have this song metadata in DB to avoid resetting audioUrl/isDownloaded
+        val existingMetadata = musicDao.getSongById(song.id)
+        if (existingMetadata == null) {
             musicDao.insertSong(song)
-        } else if (existing.duration == 0L && song.duration > 0) {
-            musicDao.insertSong(existing.copy(duration = song.duration))
+        } else if (existingMetadata.duration == 0L && song.duration > 0) {
+            musicDao.insertSong(existingMetadata.copy(duration = song.duration))
         }
         
         val songsInPlaylist = musicDao.getSongsInPlaylist(playlistId).first()
@@ -104,13 +106,24 @@ class MusicRepository(
             musicDao.insertSongToPlaylist(PlaylistSongCrossRef(playlistId, song.id, maxPos + 1))
         }
         
-        val current = musicDao.getSongById(song.id) ?: song
-        if (!current.isDownloaded) {
+        // Use updated song status
+        val currentSong = musicDao.getSongById(song.id) ?: song
+        
+        if (!currentSong.isDownloaded) {
             val playlist = musicDao.getPlaylistById(playlistId)
             val sharedPrefs = context.getSharedPreferences("AutoMusicPrefs", Context.MODE_PRIVATE)
-            val shouldDownload = if (playlist?.isPublic == true) sharedPrefs.getBoolean("auto_download_public", true)
-                                 else sharedPrefs.getBoolean("auto_download_private", true)
-            if (shouldDownload) downloadSong(current)
+            val shouldDownload = if (playlist?.isPublic == true) {
+                sharedPrefs.getBoolean("auto_download_public", true)
+            } else {
+                sharedPrefs.getBoolean("auto_download_private", true)
+            }
+            
+            Log.d("MusicRepository", "shouldDownload=$shouldDownload per la llista ${playlist?.name} (public=${playlist?.isPublic})")
+            if (shouldDownload) {
+                downloadSong(currentSong)
+            }
+        } else {
+            Log.d("MusicRepository", "La cançó ja està descarregada: ${currentSong.audioUrl}")
         }
     }
 
@@ -130,53 +143,80 @@ class MusicRepository(
     }
     
     private suspend fun cleanupOrphanedSong(songId: String) {
-        if (musicDao.getSongOccurrenceCount(songId) == 0) {
+        val count = musicDao.getSongOccurrenceCount(songId)
+        if (count == 0) {
             val song = musicDao.getSongById(songId)
             song?.audioUrl?.let { path ->
-                try { File(path).let { if (it.exists()) it.delete() } } catch (e: Exception) { }
+                try { 
+                    val file = File(path)
+                    if (file.exists()) {
+                        file.delete()
+                        Log.d("MusicRepository", "Fitxer esborrat per ser orfe: $path")
+                    }
+                } catch (e: Exception) { 
+                    Log.e("MusicRepository", "Error esborrant fitxer orfe: ${e.message}")
+                }
             }
             song?.let { musicDao.deleteSong(it) }
         }
     }
 
     suspend fun updateSongDownloadStatus(songId: String, localPath: String) {
-        musicDao.getSongById(songId)?.let {
+        val song = musicDao.getSongById(songId)
+        song?.let {
             musicDao.insertSong(it.copy(audioUrl = localPath, isDownloaded = true))
+            Log.d("MusicRepository", "Estat descàrrega actualitzat per a $songId a $localPath")
         }
     }
 
     fun getSongsInPlaylist(playlistId: Long): Flow<List<Song>> = musicDao.getSongsInPlaylist(playlistId)
 
     private fun downloadSong(song: Song) {
-        val sp = context.getSharedPreferences("downloads", Context.MODE_PRIVATE)
-        if (sp.contains("pending_${song.id}")) return
+        // Prevent multiple simultaneous downloads of the same song
+        val sharedPrefs = context.getSharedPreferences("downloads", Context.MODE_PRIVATE)
+        if (sharedPrefs.contains("pending_${song.id}")) {
+            Log.d("MusicRepository", "Cançó ${song.title} ja està en cua de descàrrega")
+            return
+        }
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val stream = com.example.auto_music.player.InnertubeResolver.resolveStream(song.id) ?: return@launch
+                Log.d("MusicRepository", "Iniciant descàrrega per a ${song.title}")
+                val stream = com.example.auto_music.player.InnertubeResolver.resolveStream(song.id) ?: run {
+                    Log.e("MusicRepository", "No s'ha pogut resoldre l'stream per a ${song.id}")
+                    return@launch
+                }
+                
+                val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
                 val fileName = "${song.id}.mp3"
                 
-                // Destination directory
+                // Destination directory: use standard Downloads folder for better visibility/access
                 val dir = File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "auto_music")
                 if (!dir.exists()) dir.mkdirs()
                 
                 val file = File(dir, fileName)
                 if (file.exists()) {
+                    Log.d("MusicRepository", "El fitxer ja existeix localment: ${file.absolutePath}")
                     updateSongDownloadStatus(song.id, file.absolutePath)
                     return@launch
                 }
 
                 val request = DownloadManager.Request(Uri.parse(stream.url))
-                    .setTitle("Descarregant ${song.title}")
+                    .setTitle("Auto Music: ${song.title}")
                     .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, "auto_music/$fileName")
                     .setNotificationVisibility(DownloadManager.Request.VISIBILITY_HIDDEN)
                     .addRequestHeader("User-Agent", stream.userAgent)
                     .addRequestHeader("Referer", "https://music.youtube.com/")
 
-                val downloadId = (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
-                sp.edit().putString(downloadId.toString(), song.id).putBoolean("pending_${song.id}", true).apply()
+                val downloadId = downloadManager.enqueue(request)
+                sharedPrefs.edit()
+                    .putString(downloadId.toString(), song.id)
+                    .putBoolean("pending_${song.id}", true)
+                    .apply()
+                Log.d("MusicRepository", "Descàrrega en cua amb ID $downloadId")
             } catch (e: Exception) {
                 Log.e("MusicRepository", "Error descàrrega: ${e.message}")
+                sharedPrefs.edit().remove("pending_${song.id}").apply()
             }
         }
     }

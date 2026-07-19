@@ -1,15 +1,13 @@
 package com.example.auto_music.ui.screens
 
-import androidx.compose.foundation.clickable
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Public
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -19,7 +17,7 @@ import com.example.auto_music.model.Playlist
 import com.example.auto_music.ui.MainViewModel
 import com.example.auto_music.AppTranslations
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun PlaylistsScreen(
     viewModel: MainViewModel, 
@@ -31,25 +29,47 @@ fun PlaylistsScreen(
     var showCreateDialog by remember { mutableStateOf(false) }
     var newPlaylistName by remember { mutableStateOf("") }
     var newIsPublic by remember { mutableStateOf(false) }
-    var playlistToDelete by remember { mutableStateOf<Playlist?>(null) }
+    
+    val selectedPlaylists = remember { mutableStateListOf<Playlist>() }
+    val isSelectionMode by remember { derivedStateOf { selectedPlaylists.isNotEmpty() } }
 
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
-                title = { Text(strings.playlists) },
+                title = { 
+                    if (isSelectionMode) {
+                        Text("${selectedPlaylists.size} seleccionades")
+                    } else {
+                        Text(strings.playlists)
+                    }
+                },
+                navigationIcon = {
+                    if (isSelectionMode) {
+                        IconButton(onClick = { selectedPlaylists.clear() }) {
+                            Icon(Icons.Default.Close, contentDescription = "Cancel·la")
+                        }
+                    }
+                },
                 actions = {
-                    if (onManualSync != null) {
-                        IconButton(onClick = onManualSync) {
-                            Icon(Icons.Default.Sync, contentDescription = "Sincronitza")
+                    if (isSelectionMode) {
+                        IconButton(onClick = {
+                            selectedPlaylists.forEach { viewModel.deletePlaylist(it) }
+                            selectedPlaylists.clear()
+                        }) {
+                            Icon(Icons.Default.Delete, contentDescription = "Elimina seleccionades", tint = MaterialTheme.colorScheme.error)
+                        }
+                    } else {
+                        IconButton(onClick = { showCreateDialog = true }) {
+                            Icon(Icons.Default.Add, contentDescription = "Crea llista")
+                        }
+                        if (onManualSync != null) {
+                            IconButton(onClick = onManualSync) {
+                                Icon(Icons.Default.Sync, contentDescription = "Sincronitza")
+                            }
                         }
                     }
                 }
             )
-        },
-        floatingActionButton = {
-            FloatingActionButton(onClick = { showCreateDialog = true }) {
-                Icon(Icons.Default.Add, contentDescription = "Crea llista de reproducció")
-            }
         }
     ) { padding ->
         LazyColumn(modifier = Modifier.padding(padding).fillMaxSize().padding(horizontal = 16.dp)) {
@@ -60,8 +80,24 @@ fun PlaylistsScreen(
                 item {
                     Text(strings.autoDownloadPrivate, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(vertical = 8.dp))
                 }
-                items(privateLists) { playlist ->
-                    PlaylistCard(playlist, strings.isPrivate, Icons.Default.Lock, onPlaylistClick, { playlistToDelete = it })
+                items(privateLists, key = { it.id }) { playlist ->
+                    val isSelected = selectedPlaylists.contains(playlist)
+                    PlaylistCard(
+                        playlist = playlist,
+                        typeLabel = strings.isPrivate,
+                        icon = if (isSelected) Icons.Default.CheckCircle else Icons.Default.Lock,
+                        isSelected = isSelected,
+                        onClick = {
+                            if (isSelectionMode) {
+                                if (isSelected) selectedPlaylists.remove(playlist) else selectedPlaylists.add(playlist)
+                            } else {
+                                onPlaylistClick(playlist)
+                            }
+                        },
+                        onLongClick = {
+                            if (!isSelected) selectedPlaylists.add(playlist)
+                        }
+                    )
                 }
             }
 
@@ -70,10 +106,28 @@ fun PlaylistsScreen(
                     Spacer(Modifier.height(16.dp))
                     Text(strings.autoDownloadPublic, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(vertical = 8.dp))
                 }
-                items(publicLists) { playlist ->
-                    PlaylistCard(playlist, strings.isPublic, Icons.Default.Public, onPlaylistClick, { playlistToDelete = it })
+                items(publicLists, key = { it.id }) { playlist ->
+                    val isSelected = selectedPlaylists.contains(playlist)
+                    PlaylistCard(
+                        playlist = playlist,
+                        typeLabel = strings.isPublic,
+                        icon = if (isSelected) Icons.Default.CheckCircle else Icons.Default.Public,
+                        isSelected = isSelected,
+                        onClick = {
+                            if (isSelectionMode) {
+                                if (isSelected) selectedPlaylists.remove(playlist) else selectedPlaylists.add(playlist)
+                            } else {
+                                onPlaylistClick(playlist)
+                            }
+                        },
+                        onLongClick = {
+                            if (!isSelected) selectedPlaylists.add(playlist)
+                        }
+                    )
                 }
             }
+            
+            item { Spacer(Modifier.height(80.dp)) }
         }
     }
 
@@ -118,57 +172,49 @@ fun PlaylistsScreen(
             }
         )
     }
-
-    if (playlistToDelete != null) {
-        AlertDialog(
-            onDismissRequest = { playlistToDelete = null },
-            title = { Text(strings.deletePlaylist) },
-            text = { Text("Estàs segur que vols eliminar la llista \"${playlistToDelete?.name}\"?") },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        playlistToDelete?.let { viewModel.deletePlaylist(it) }
-                        playlistToDelete = null
-                    }
-                ) {
-                    Text("Eliminar", color = MaterialTheme.colorScheme.error)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { playlistToDelete = null }) {
-                    Text(strings.close)
-                }
-            }
-        )
-    }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun PlaylistCard(
     playlist: Playlist,
     typeLabel: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
-    onClick: (Playlist) -> Unit,
-    onDelete: (Playlist) -> Unit
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit
 ) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)
-            .clickable { onClick(playlist) }
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            ),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+        )
     ) {
         Row(
             modifier = Modifier.padding(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(icon, contentDescription = null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
+            Icon(
+                icon, 
+                contentDescription = null, 
+                modifier = Modifier.size(24.dp), 
+                tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+            )
             Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(text = playlist.name, style = MaterialTheme.typography.titleLarge)
                 Text(text = typeLabel, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary)
             }
-            IconButton(onClick = { onDelete(playlist) }) {
-                Icon(Icons.Default.Delete, contentDescription = "Eliminar", tint = MaterialTheme.colorScheme.error)
+            if (isSelected) {
+                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            } else {
+                Icon(Icons.Default.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.outline)
             }
         }
     }

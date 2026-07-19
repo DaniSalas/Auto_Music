@@ -5,6 +5,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -174,8 +175,19 @@ fun MainApp(
     val scope = rememberCoroutineScope()
     var currentScreen by remember { mutableIntStateOf(0) }
     var selectedPlaylist by remember { mutableStateOf<Playlist?>(null) }
+    var isPlayerExpanded by remember { mutableStateOf(false) }
     
     val strings = getTranslations(currentLanguage)
+
+    // Handle Back Button
+    BackHandler(enabled = drawerState.isOpen || selectedPlaylist != null || currentScreen != 0 || isPlayerExpanded) {
+        when {
+            drawerState.isOpen -> scope.launch { drawerState.close() }
+            isPlayerExpanded -> isPlayerExpanded = false
+            selectedPlaylist != null -> selectedPlaylist = null
+            currentScreen != 0 -> currentScreen = 0
+        }
+    }
 
     LaunchedEffect(syncId) {
         if (syncId.isNotBlank()) {
@@ -266,7 +278,13 @@ fun MainApp(
                 },
                 bottomBar = {
                     Column(modifier = if (selectedPlaylist != null) Modifier.navigationBarsPadding() else Modifier) {
-                        controller?.let { MiniPlayer(it) }
+                        controller?.let { 
+                            MiniPlayer(
+                                controller = it, 
+                                isExpanded = isPlayerExpanded,
+                                onToggleExpand = { isPlayerExpanded = !isPlayerExpanded }
+                            ) 
+                        }
                         if (selectedPlaylist == null && currentScreen < 2) {
                             NavigationBar {
                                 NavigationBarItem(
@@ -293,10 +311,15 @@ fun MainApp(
                     if (selectedPlaylist != null) {
                         PlaylistSongsScreen(
                             viewModel = viewModel,
+                            strings = strings,
                             playlist = selectedPlaylist!!,
                             onBack = { selectedPlaylist = null },
                             onPlay = { song ->
                                 playSong(song, controller, selectedPlaylist?.id)
+                                // If not downloaded, trigger download if enabled
+                                if (!song.isDownloaded) {
+                                    scope.launch { viewModel.addSongToPlaylist(song, selectedPlaylist!!) }
+                                }
                             }
                         )
                     } else {
@@ -585,7 +608,8 @@ data class AppTranslations(
     val isPublic: String,
     val isPrivate: String,
     val createPublic: String,
-    val createPrivate: String
+    val createPrivate: String,
+    val selectedItems: String
 )
 
 fun getTranslations(lang: String): AppTranslations {
@@ -597,7 +621,7 @@ fun getTranslations(lang: String): AppTranslations {
             "Cloud Synchronization", "Sync ID", "Use the same ID on all devices to share your playlists.", "Generate",
             "Delete Playlist", "Synchronization successful", "Synchronization error",
             "Automatic Downloads", "Private Playlists", "Public Playlists",
-            "Public", "Private", "Create Public", "Create Private"
+            "Public", "Private", "Create Public", "Create Private", "selected"
         )
         "CATALA" -> AppTranslations(
             "Cerca", "Llistes", "Idioma", "Configuració", "Donació",
@@ -606,7 +630,7 @@ fun getTranslations(lang: String): AppTranslations {
             "Sincronització al Núvol", "ID de Sincronització", "Utilitza el mateix ID en tots els dispositius per compartir les teves llistes.", "Generar",
             "Eliminar llista", "Sincronització correcta", "Error en la sincronització",
             "Descàrregues Automàtiques", "Llistes Privades", "Llistes Públiques",
-            "Pública", "Privada", "Crea Pública", "Crea Privada"
+            "Pública", "Privada", "Crea Pública", "Crea Privada", "seleccionades"
         )
         "GALEGO" -> AppTranslations(
             "Cerca", "Listas", "Lingua", "Configuración", "Doazón",
@@ -615,7 +639,7 @@ fun getTranslations(lang: String): AppTranslations {
             "Sincronización na Nube", "ID de Sincronización", "Usa o mesmo ID en todos os teus dispositivos.", "Xerar",
             "Eliminar lista", "Sincronización correcta", "Error na sincronización",
             "Descargas Automáticas", "Listas Privadas", "Listas Públicas",
-            "Pública", "Privada", "Crear Pública", "Crear Privada"
+            "Pública", "Privada", "Crear Pública", "Crear Privada", "seleccionadas"
         )
         "EUSKARA" -> AppTranslations(
             "Bilatu", "Zerrendak", "Hizkuntza", "Konfigurazioa", "Dohaintza",
@@ -624,7 +648,7 @@ fun getTranslations(lang: String): AppTranslations {
             "Hodeiko Sinkronizazioa", "Sinkronizazio IDa", "Erabili ID bera gailu guztietan.", "Sortu",
             "Zerrenda ezabatu", "Sinkronizazio arrakastatsua", "Errorea sinkronizatzean",
             "Deskarga Automatikoak", "Zerrenda Pribatuak", "Zerrenda Publikoak",
-            "Publikoa", "Pribatua", "Publikoa Sortu", "Pribatua Sortu"
+            "Publikoa", "Pribatua", "Publikoa Sortu", "Pribatua Sortu", "hautatuta"
         )
         "FRANCAIS" -> AppTranslations(
             "Recherche", "Listes", "Langue", "Configuration", "Don",
@@ -633,25 +657,25 @@ fun getTranslations(lang: String): AppTranslations {
             "Synchronisation Cloud", "ID de Synchro", "Utilisez le même ID sur tous vos appareils.", "Générer",
             "Supprimer la liste", "Synchronisation réussie", "Erreur de synchronización",
             "Téléchargements Automatiques", "Listes Privées", "Listes Publiques",
-            "Publique", "Privée", "Créer Publique", "Créer Privée"
+            "Publique", "Privée", "Créer Publique", "Créer Privée", "sélectionnées"
         )
         "DEUTSCH" -> AppTranslations(
             "Suche", "Listen", "Sprache", "Konfiguration", "Spende",
             "Wenn Ihnen meine App gefallen hat, können Sie den von Ihnen gewünschten Betrag spenden.",
-            "Hintergrundfarbe auswählen", "Schließen", "Helligkeit", "Vorschau", "Dunkelmodus", "Benutzerdefinierte Farbe ist im Dunkelmodus deaktiviert",
+            "Hintergrundfarbe auswählen", "Schließen", "Helligkeit", "Vorschau", "Dunkelmodus", "Benutzerdefinierte Farbe ist im Dunkelmodus desactiviert",
             "Cloud-Synchronisation", "Sync-ID", "Verwenden Sie dieselbe ID auf allen Geräten.", "Generieren",
             "Wiedergabeliste löschen", "Synchronisierung erfolgreich", "Synchronisierungsfehler",
             "Automatische Downloads", "Private Playlists", "Öffentliche Playlists",
-            "Öffentlich", "Privat", "Öffentlich Erstellen", "Privat Erstellen"
+            "Öffentlich", "Privat", "Öffentlich Erstellen", "Privat Erstellen", "ausgewählt"
         )
         "ITALIANO" -> AppTranslations(
             "Cerca", "Liste", "Lingua", "Configurazione", "Donazione",
             "Se ti è piaciuta la mia app, puedes donare l'importo que consideri.",
             "Seleziona el colore dello sfondo", "Chiudi", "Luminosità", "Anteprima", "Modalità scura", "Il colore personalizado è disabilitato in modalidad scura",
-            "Sincronizzazione Cloud", "ID Sincronizzazione", "Usa lo stesso ID su tutti i dispositivos.", "Genera",
+            "Sincronizzazione Cloud", "ID Sincronizzazione", "Usa lo mismo ID en todos i dispositivos.", "Genera",
             "Elimina playlist", "Sincronizzazione riuscita", "Errore di sincronizzazione",
             "Download Automatici", "Playlist Private", "Playlist Pubbliche",
-            "Pubblica", "Privata", "Crea Pubblica", "Crea Privata"
+            "Pubblica", "Privata", "Crea Pubblica", "Crea Privata", "selezionate"
         )
         "KOREAN" -> AppTranslations(
             "검색", "재생 목록", "언어", "설정", "기부",
@@ -660,16 +684,16 @@ fun getTranslations(lang: String): AppTranslations {
             "클라우드 동기화", "동기화 ID", "모든 장치에서 동일한 ID를 사용하여 재생 목록을 공유하십시오.", "생성",
             "재생 목록 삭제", "동기화 성공", "동기화 오류",
             "자동 다운로드", "개인 재생 목록", "공개 재생 목록",
-            "공개", "비공개", "공개 생성", "비공개 생성"
+            "공개", "비공개", "공개 생성", "비공개 생성", "선택됨"
         )
         "JAPANESE" -> AppTranslations(
             "検索", "プレイリスト", "言語", "設定", "寄付",
-            "私のアプリケーションが気に入ったら、検討している金額를 기부할 수 있습니다.",
+            "私のアプリケーションが気に入ったら、検討している金額を寄付できます。",
             "背景色を選択", "閉じる", "明るさ", "プレビュー", "ダークモード", "ダークモードではカスタムカラーが無効になります",
-            "クラウド同期", "同期ID", "すべてのデバイスで同じIDを使用してプレイリストを 공유하십시오.", "生成",
+            "クラウド同期", "同期ID", "すべてのデバイスで同じIDを使用してプレイリストを共有します。", "生成",
             "プレイリストを削除", "同期に成功しました", "同期エラー",
             "自動ダウンロード", "プライベートプレイリスト", "公開プレイリスト",
-            "公開", "秘密", "公開作成", "秘密作成"
+            "公開", "秘密", "公開作成", "秘密作成", "選択済み"
         )
         else -> AppTranslations( // ESPANOL
             "Buscar", "Listas", "Idioma", "Configuración", "Donación",
@@ -678,13 +702,17 @@ fun getTranslations(lang: String): AppTranslations {
             "Sincronización en la Nube", "ID de Sincronización", "Usa el mismo ID en todos tus dispositivos para compartir tus listas.", "Generar",
             "Eliminar lista", "Sincronización correcta", "Error en la sincronización",
             "Descargas Automáticas", "Listas Privadas", "Listas Públicas",
-            "Pública", "Privada", "Crear Pública", "Crear Privada"
+            "Pública", "Privada", "Crear Pública", "Crear Privada", "seleccionadas"
         )
     }
 }
 
 @Composable
-fun MiniPlayer(controller: androidx.media3.session.MediaController) {
+fun MiniPlayer(
+    controller: androidx.media3.session.MediaController,
+    isExpanded: Boolean,
+    onToggleExpand: () -> Unit
+) {
     var title by remember { mutableStateOf(controller.mediaMetadata.title?.toString() ?: "") }
     var artist by remember { mutableStateOf(controller.mediaMetadata.artist?.toString() ?: "") }
     var artworkUri by remember { mutableStateOf(controller.mediaMetadata.artworkUri) }
@@ -693,8 +721,6 @@ fun MiniPlayer(controller: androidx.media3.session.MediaController) {
     var position by remember { mutableLongStateOf(controller.currentPosition) }
     var duration by remember { mutableLongStateOf(controller.duration) }
     
-    var isExpanded by remember { mutableStateOf(false) }
-
     DisposableEffect(controller) {
         val listener = object : androidx.media3.common.Player.Listener {
             override fun onMediaMetadataChanged(mediaMetadata: androidx.media3.common.MediaMetadata) {
@@ -729,7 +755,7 @@ fun MiniPlayer(controller: androidx.media3.session.MediaController) {
     if (title.isNotEmpty()) {
         Surface(
             color = MaterialTheme.colorScheme.primaryContainer,
-            modifier = Modifier.fillMaxWidth().clickable { isExpanded = !isExpanded },
+            modifier = Modifier.fillMaxWidth().clickable { onToggleExpand() },
             tonalElevation = 8.dp
         ) {
             Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = if (isExpanded) 16.dp else 4.dp)) {

@@ -7,12 +7,9 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.net.Uri
 import android.os.Bundle
+import android.util.Log
 import androidx.annotation.OptIn
-import androidx.media3.common.AudioAttributes
-import androidx.media3.common.C
-import androidx.media3.common.MediaItem
-import androidx.media3.common.MediaMetadata
-import androidx.media3.common.Player
+import androidx.media3.common.*
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.ResolvingDataSource
@@ -21,11 +18,7 @@ import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
-import androidx.media3.session.LibraryResult
-import androidx.media3.session.MediaLibraryService
-import androidx.media3.session.MediaSession
-import androidx.media3.session.SessionCommand
-import androidx.media3.session.SessionResult
+import androidx.media3.session.*
 import com.example.auto_music.data.MusicRepository
 import com.example.auto_music.data.local.MusicDatabase
 import com.example.auto_music.data.remote.YouTubeService
@@ -34,25 +27,21 @@ import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.SettableFuture
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
+import java.io.File
 import java.util.concurrent.TimeUnit
 import androidx.core.net.toUri
 import androidx.core.content.ContextCompat
-import java.io.File
 
 @UnstableApi
 class MusicService : MediaLibraryService() {
 
-    private lateinit var player: ExoPlayer
-    private lateinit var mediaSession: MediaLibrarySession
+    private var player: ExoPlayer? = null
+    private var mediaSession: MediaLibrarySession? = null
     private lateinit var repository: MusicRepository
     private val serviceJob = SupervisorJob()
     private val serviceScope = CoroutineScope(Dispatchers.Main + serviceJob)
@@ -61,6 +50,7 @@ class MusicService : MediaLibraryService() {
     private fun createDataSourceFactory(): androidx.media3.datasource.DataSource.Factory {
         val httpDataSourceFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
+            .setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.3")
 
         val defaultDataSourceFactory = androidx.media3.datasource.DefaultDataSource.Factory(this, httpDataSourceFactory)
 
@@ -74,8 +64,15 @@ class MusicService : MediaLibraryService() {
             if (videoId.isEmpty()) return@Factory dataSpec
 
             val stream = try {
-                runBlocking(Dispatchers.IO) { InnertubeResolver.resolveStream(videoId) }
-            } catch (e: Exception) { null }
+                runBlocking(Dispatchers.IO) { 
+                    withTimeoutOrNull(5000) {
+                        InnertubeResolver.resolveStream(videoId)
+                    }
+                }
+            } catch (e: Exception) { 
+                Log.e("MusicService", "Error resolving stream for $videoId: ${e.message}")
+                null 
+            }
             
             if (stream != null) {
                 val headers = dataSpec.httpRequestHeaders.toMutableMap()
@@ -113,7 +110,6 @@ class MusicService : MediaLibraryService() {
                     }
                     cursor.close()
                 }
-                // Cleanup pending status
                 context.getSharedPreferences("downloads", Context.MODE_PRIVATE).edit().remove("pending_$songId").apply()
             }
         }
@@ -121,24 +117,26 @@ class MusicService : MediaLibraryService() {
 
     override fun onCreate() {
         super.onCreate()
+        Log.d("MusicService", "onCreate: Iniciant servei v4.5")
         
         serviceScope.launch { com.example.auto_music.data.remote.Innertube.fetchVisitorData() }
         
         cache = PlayerCache.getInstance(applicationContext)
         val database = MusicDatabase.getDatabase(applicationContext)
-        
         val okHttpClient = OkHttpClient.Builder().connectTimeout(30, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).build()
         val retrofit = Retrofit.Builder().baseUrl("https://www.youtube.com/").client(okHttpClient).addConverterFactory(GsonConverterFactory.create()).build()
         repository = MusicRepository(database.musicDao(), retrofit.create(YouTubeService::class.java), applicationContext)
 
-        player = ExoPlayer.Builder(this)
+        val newPlayer = ExoPlayer.Builder(this)
             .setMediaSourceFactory(DefaultMediaSourceFactory(this).setDataSourceFactory(createDataSourceFactory()))
             .setAudioAttributes(AudioAttributes.Builder().setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).setUsage(C.USAGE_MEDIA).build(), true)
             .setHandleAudioBecomingNoisy(true)
             .setWakeMode(C.WAKE_MODE_NETWORK)
             .build()
+        
+        player = newPlayer
 
-        mediaSession = MediaLibrarySession.Builder(this, player, LibrarySessionCallback()).build()
+        mediaSession = MediaLibrarySession.Builder(this, newPlayer, LibrarySessionCallback()).build()
         
         ContextCompat.registerReceiver(
             this, 
@@ -148,11 +146,24 @@ class MusicService : MediaLibraryService() {
         )
     }
 
-    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = mediaSession
+    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? {
+        Log.d("MusicService", "onGetSession: Sol·licitat per ${controllerInfo.packageName}")
+        return mediaSession
+    }
 
     private inner class LibrarySessionCallback : MediaLibrarySession.Callback {
         
         override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
+            Log.d("MusicService", "onConnect: Connectat des de ${controller.packageName}")
+            
+            // Accept all default commands
+            val sessionCommands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
+                .add(SessionCommand(SessionCommand.COMMAND_CODE_LIBRARY_GET_CHILDREN))
+                .add(SessionCommand(SessionCommand.COMMAND_CODE_LIBRARY_GET_ITEM))
+                .add(SessionCommand(SessionCommand.COMMAND_CODE_LIBRARY_GET_LIBRARY_ROOT))
+                .add(SessionCommand(SessionCommand.COMMAND_CODE_LIBRARY_SUBSCRIBE))
+                .build()
+
             val playerCommands = MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS.buildUpon()
                 .add(Player.COMMAND_SEEK_TO_NEXT)
                 .add(Player.COMMAND_SEEK_TO_PREVIOUS)
@@ -161,13 +172,14 @@ class MusicService : MediaLibraryService() {
                 .add(Player.COMMAND_SEEK_FORWARD)
                 .add(Player.COMMAND_SEEK_BACK)
                 .add(Player.COMMAND_PLAY_PAUSE)
+                .add(Player.COMMAND_PREPARE)
                 .add(Player.COMMAND_STOP)
                 .add(Player.COMMAND_SET_MEDIA_ITEM)
-                .add(Player.COMMAND_PREPARE)
-                .add(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)
+                .add(Player.COMMAND_GET_CURRENT_MEDIA_ITEM)
+                .add(Player.COMMAND_GET_TIMELINE)
                 .build()
 
-            return MediaSession.ConnectionResult.accept(MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS, playerCommands)
+            return MediaSession.ConnectionResult.accept(sessionCommands, playerCommands)
         }
 
         override fun onSetMediaItems(
@@ -180,6 +192,7 @@ class MusicService : MediaLibraryService() {
             val future = SettableFuture.create<MediaSession.MediaItemsWithStartPosition>()
             
             serviceScope.launch {
+                Log.d("MusicService", "onSetMediaItems: Carregant ${mediaItems.size} ítems")
                 val item = mediaItems.firstOrNull() ?: run {
                     future.set(MediaSession.MediaItemsWithStartPosition(mediaItems, startIndex, startPositionMs))
                     return@launch
@@ -190,13 +203,21 @@ class MusicService : MediaLibraryService() {
                     val playlistSongs = repository.getSongsInPlaylist(playlistId).first()
                     val items = playlistSongs.map { createMediaItem(it, playlistId) }
                     val indexInPlaylist = playlistSongs.indexOfFirst { it.id == item.mediaId }.coerceAtLeast(0)
-                    
+                    Log.d("MusicService", "onSetMediaItems: Expandint llista $playlistId a ${items.size} cançons")
                     future.set(MediaSession.MediaItemsWithStartPosition(items, indexInPlaylist, startPositionMs))
                 } else {
-                    val updatedItems = mediaItems.map { 
+                    val updatedItems = mutableListOf<MediaItem>()
+                    for (it in mediaItems) {
                         if (it.mediaId.length > 5 && !it.mediaId.startsWith("PLAYLIST_")) {
-                            repository.getSongById(it.mediaId)?.let { song -> createMediaItem(song, null) } ?: it
-                        } else it
+                            val song = repository.getSongById(it.mediaId)
+                            if (song != null) {
+                                updatedItems.add(createMediaItem(song, null))
+                            } else {
+                                updatedItems.add(it)
+                            }
+                        } else {
+                            updatedItems.add(it)
+                        }
                     }
                     future.set(MediaSession.MediaItemsWithStartPosition(updatedItems, startIndex, startPositionMs))
                 }
@@ -212,44 +233,48 @@ class MusicService : MediaLibraryService() {
                 "https://music.youtube.com/watch?v=${song.id}"
             }
             
+            val metadata = MediaMetadata.Builder()
+                .setTitle(song.title)
+                .setArtist(song.artist)
+                .setArtworkUri(song.thumbnailUrl.toUri())
+                .setIsBrowsable(false)
+                .setIsPlayable(true)
+                .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
+                .setExtras(Bundle().apply {
+                    if (playlistId != null) putString("playlistId", playlistId.toString())
+                    putLong("android.media.metadata.DURATION", song.duration * 1000L)
+                })
+                .build()
+
             return MediaItem.Builder()
                 .setMediaId(song.id)
                 .setUri(finalUri)
                 .setMimeType("audio/mpeg")
-                .setMediaMetadata(
-                    MediaMetadata.Builder()
-                        .setTitle(song.title)
-                        .setArtist(song.artist)
-                        .setArtworkUri(song.thumbnailUrl.toUri())
-                        .setIsBrowsable(false)
-                        .setIsPlayable(true)
-                        .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
-                        .setExtras(Bundle().apply {
-                            if (playlistId != null) putString("playlistId", playlistId.toString())
-                            putLong("android.media.metadata.DURATION", song.duration * 1000L)
-                        })
-                        .build()
-                )
+                .setMediaMetadata(metadata)
                 .build()
         }
 
         override fun onGetLibraryRoot(session: MediaLibrarySession, browser: MediaSession.ControllerInfo, params: LibraryParams?): ListenableFuture<LibraryResult<MediaItem>> {
+            Log.d("MusicService", "onGetLibraryRoot: Sol·licitat")
+            val rootMetadata = MediaMetadata.Builder()
+                .setTitle("Auto Music")
+                .setIsBrowsable(true)
+                .setIsPlayable(false)
+                .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+                .setExtras(Bundle().apply {
+                    putInt("android.media.browse.CONTENT_STYLE_BROWSABLE_HINT", 1)
+                    putInt("android.media.browse.CONTENT_STYLE_PLAYABLE_HINT", 1)
+                }).build()
+
             val rootItem = MediaItem.Builder()
                 .setMediaId("ROOT")
-                .setMediaMetadata(MediaMetadata.Builder()
-                    .setTitle("Auto Music")
-                    .setIsBrowsable(true)
-                    .setIsPlayable(false)
-                    .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
-                    .setExtras(Bundle().apply {
-                        putInt("android.media.browse.CONTENT_STYLE_BROWSABLE_HINT", 1)
-                        putInt("android.media.browse.CONTENT_STYLE_PLAYABLE_HINT", 1)
-                    }).build())
+                .setMediaMetadata(rootMetadata)
                 .build()
             return Futures.immediateFuture(LibraryResult.ofItem(rootItem, params))
         }
 
         override fun onGetChildren(session: MediaLibrarySession, browser: MediaSession.ControllerInfo, parentId: String, page: Int, pageSize: Int, params: LibraryParams?): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
+            Log.d("MusicService", "onGetChildren: parentId=$parentId")
             val future = SettableFuture.create<LibraryResult<ImmutableList<MediaItem>>>()
             serviceScope.launch {
                 try {
@@ -263,7 +288,9 @@ class MusicService : MediaLibraryService() {
                                     .setIsBrowsable(true)
                                     .setIsPlayable(false)
                                     .setMediaType(MediaMetadata.MEDIA_TYPE_PLAYLIST)
-                                    .setExtras(Bundle().apply { putInt("android.media.browse.CONTENT_STYLE_BROWSABLE_HINT", 1) })
+                                    .setExtras(Bundle().apply { 
+                                        putInt("android.media.browse.CONTENT_STYLE_BROWSABLE_HINT", 1) 
+                                    })
                                     .build())
                                 .build()
                         }
@@ -277,6 +304,7 @@ class MusicService : MediaLibraryService() {
                         future.set(LibraryResult.ofError(LibraryResult.RESULT_ERROR_BAD_VALUE))
                     }
                 } catch (e: Exception) {
+                    Log.e("MusicService", "Error in onGetChildren: ${e.message}")
                     future.set(LibraryResult.ofError(LibraryResult.RESULT_ERROR_UNKNOWN))
                 }
             }
@@ -285,9 +313,10 @@ class MusicService : MediaLibraryService() {
     }
 
     override fun onDestroy() {
+        Log.d("MusicService", "onDestroy")
         unregisterReceiver(downloadReceiver)
-        mediaSession.release()
-        player.release()
+        mediaSession?.release()
+        player?.release()
         serviceJob.cancel()
         super.onDestroy()
     }

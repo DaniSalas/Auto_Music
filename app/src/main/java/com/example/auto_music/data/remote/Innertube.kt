@@ -17,13 +17,11 @@ import io.ktor.http.userAgent
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.json.Json
 import android.util.Log
-
 import io.ktor.client.statement.*
-
 import kotlinx.serialization.json.*
-
 import com.example.auto_music.data.remote.model.PlayerResponse
 import com.example.auto_music.data.remote.model.YouTubeClient
+import java.util.concurrent.TimeUnit
 
 object InnertubeConstants {
     const val YOUTUBE_MUSIC_URL = "https://music.youtube.com"
@@ -33,21 +31,19 @@ object InnertubeConstants {
     const val CLIENT_NAME = "WEB_REMIX"
     const val X_CLIENT_NAME = "67"
     const val CLIENT_VERSION = "1.20260213.01.00"
-    const val MUSIC_ITEM_RENDERER_MASK = "musicResponsiveListItemRenderer(flexColumns,fixedColumns,thumbnail,navigationEndpoint,badges,lengthText)"
-    const val SEARCH_MASK = "contents.tabbedSearchResultsRenderer.tabs.tabRenderer.content.sectionListRenderer.contents.musicShelfRenderer(continuations,contents.$MUSIC_ITEM_RENDERER_MASK)"
 }
 
 object Innertube {
-    private val json = Json {
-        ignoreUnknownKeys = true
-        explicitNulls = false
-        encodeDefaults = true
-        coerceInputValues = true
-    }
+    private val json = Json { ignoreUnknownKeys = true; explicitNulls = false; encodeDefaults = true; coerceInputValues = true }
 
     val client = HttpClient(OkHttp) {
-        install(ContentNegotiation) {
-            json(json)
+        install(ContentNegotiation) { json(json) }
+        engine {
+            config {
+                connectTimeout(15, TimeUnit.SECONDS)
+                readTimeout(15, TimeUnit.SECONDS)
+                writeTimeout(15, TimeUnit.SECONDS)
+            }
         }
     }
 
@@ -55,164 +51,48 @@ object Innertube {
 
     suspend fun fetchVisitorData() {
         try {
-            val response = client.get("https://music.youtube.com/sw.js_data")
+            val response = client.get("https://music.youtube.com/sw.js_data") {
+                userAgent(InnertubeConstants.CHROME_WINDOWS_USER_AGENT)
+            }
             val text = response.bodyAsText()
-            
-            val jsonText = text.substringAfter(")]}'", "").trim()
-            if (jsonText.isNotEmpty()) {
-                try {
-                    val jsonElement = json.parseToJsonElement(jsonText)
-                    
-                    fun findVisitorData(element: JsonElement): String? {
-                        return when (element) {
-                            is JsonPrimitive -> {
-                                val content = element.contentOrNull
-                                if (content?.startsWith("Cg") == true && content.length >= 35) content else null
-                            }
-                            is JsonArray -> {
-                                for (item in element) {
-                                    val found = findVisitorData(item)
-                                    if (found != null) return found
-                                }
-                                null
-                            }
-                            is JsonObject -> {
-                                for (item in element.values) {
-                                    val found = findVisitorData(item)
-                                    if (found != null) return found
-                                }
-                                null
-                            }
-                        }
-                    }
-
-                    val visitorId = findVisitorData(jsonElement)
-                    if (visitorId != null) {
-                        visitorData = visitorId
-                        Log.i("Innertube", "Fetched visitorData (robust search): $visitorId")
-                        return
-                    }
-                } catch (e: Exception) {
-                    Log.w("Innertube", "Robust parsing failed, trying regex")
-                }
-            }
-            
-            // Fallback to regex
-            val match = Regex("Cg[a-zA-Z0-9_-]{35,45}").find(text)
-            match?.value?.let {
+            Regex("Cg[a-zA-Z0-9_-]{35,45}").find(text)?.value?.let {
                 visitorData = it
-                Log.i("Innertube", "Fetched visitorData (regex): $it")
+                Log.i("Innertube", "Updated visitorData: $it")
             }
-        } catch (e: Exception) {
-            Log.e("Innertube", "Failed to fetch visitorData: ${e.message}", e)
-        }
+        } catch (e: Exception) { Log.w("Innertube", "fetchVisitorData failed, using fallback") }
     }
 
     suspend fun search(query: String): InnerTubeResponse? {
-        val currentVisitorData = visitorData
         return try {
-            val context = InnerTubeContext(
-                client = InnerTubeClient(
-                    clientName = InnertubeConstants.CLIENT_NAME,
-                    clientVersion = InnertubeConstants.CLIENT_VERSION,
-                    hl = "en",
-                    gl = "US",
-                    visitorData = currentVisitorData,
-                    userAgent = InnertubeConstants.CHROME_WINDOWS_USER_AGENT,
-                    referer = "${InnertubeConstants.YOUTUBE_MUSIC_URL}/"
-                )
-            )
-            val body = SearchBody(query = query, context = context)
-            
+            val context = InnerTubeContext(client = InnerTubeClient(clientName = InnertubeConstants.CLIENT_NAME, clientVersion = InnertubeConstants.CLIENT_VERSION, hl = "en", gl = "US", visitorData = visitorData, userAgent = InnertubeConstants.CHROME_WINDOWS_USER_AGENT, referer = "${InnertubeConstants.YOUTUBE_MUSIC_URL}/"))
             val response = client.post("${InnertubeConstants.YOUTUBE_MUSIC_URL}/youtubei/v1/search") {
                 contentType(ContentType.Application.Json)
-                header("X-Goog-Api-Format-Version", "1")
                 header("X-YouTube-Client-Name", InnertubeConstants.X_CLIENT_NAME)
                 header("X-YouTube-Client-Version", InnertubeConstants.CLIENT_VERSION)
-                header("X-Goog-Api-Key", InnertubeConstants.API_KEY)
-                header("X-Origin", InnertubeConstants.YOUTUBE_MUSIC_URL)
-                header("X-Youtube-Bootstrap-Logged-In", "false")
-                header(HttpHeaders.Referrer, "${InnertubeConstants.YOUTUBE_MUSIC_URL}/")
-                header("X-Goog-Visitor-Id", currentVisitorData)
+                header("X-Goog-Visitor-Id", visitorData)
                 userAgent(InnertubeConstants.CHROME_WINDOWS_USER_AGENT)
-                parameter("prettyPrint", "false")
                 parameter("key", InnertubeConstants.API_KEY)
-                setBody(body)
+                setBody(SearchBody(query = query, context = context))
             }
-            val responseText = response.bodyAsText()
-            // Split log message to avoid truncation
-            responseText.chunked(3000).forEach { Log.d("Innertube", "Response chunk: $it") }
-            json.decodeFromString<InnerTubeResponse>(responseText)
-        } catch (e: Exception) {
-            Log.e("Innertube", "Search failed: ${e.message}", e)
-            null
-        }
+            json.decodeFromString<InnerTubeResponse>(response.bodyAsText())
+        } catch (e: Exception) { null }
     }
 
-    private fun generateCpn(): String {
-        val chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
-        return (1..16).map { chars.random() }.joinToString("")
-    }
-
-    suspend fun player(
-        videoId: String,
-        clientType: YouTubeClient = YouTubeClient.WEB_REMIX,
-        signatureTimestamp: Int? = 20465
-    ): PlayerResponse? {
+    suspend fun player(videoId: String, clientType: YouTubeClient): PlayerResponse? {
         return try {
-            val context = clientType.toContext(visitorData).let {
-                if (clientType.isEmbedded) {
-                    it.copy(
-                        thirdParty = InnerTubeContext.ThirdParty(
-                            embedUrl = "https://www.youtube.com/watch?v=${videoId}"
-                        )
-                    )
-                } else it
-            }
-            
-            val body = PlayerBody(
-                context = context,
-                videoId = videoId,
-                cpn = generateCpn(),
-                playbackContext = if (clientType.useSignatureTimestamp) {
-                    PlayerBody.PlaybackContext(
-                        PlayerBody.PlaybackContext.ContentPlaybackContext(
-                            signatureTimestamp
-                        )
-                    )
-                } else null
-            )
-            
+            val context = clientType.toContext(visitorData)
+            val body = PlayerBody(context = context, videoId = videoId, cpn = (1..16).map { "abcdefghijklmnopqrstuvwxyz0123456789".random() }.joinToString(""), playbackContext = PlayerBody.PlaybackContext(PlayerBody.PlaybackContext.ContentPlaybackContext(20465)))
             val baseUrl = if (clientType.isMusic) InnertubeConstants.YOUTUBE_MUSIC_URL else "https://www.youtube.com"
-            
             val response = client.post("${baseUrl}/youtubei/v1/player") {
                 contentType(ContentType.Application.Json)
-                header("X-Goog-Api-Format-Version", "1")
                 header("X-YouTube-Client-Name", clientType.clientId)
                 header("X-YouTube-Client-Version", clientType.clientVersion)
-                header("X-Goog-Api-Key", clientType.apiKey)
-                
-                if (clientType.isMusic) {
-                    header("X-Origin", InnertubeConstants.YOUTUBE_MUSIC_URL)
-                    header(HttpHeaders.Referrer, "${InnertubeConstants.YOUTUBE_MUSIC_URL}/")
-                }
-
                 header("X-Goog-Visitor-Id", visitorData)
                 userAgent(clientType.userAgent)
-                parameter("prettyPrint", "false")
                 parameter("key", clientType.apiKey)
                 setBody(body)
             }
-            val responseText = response.bodyAsText()
-            
-            // Log raw response for debugging playback issues
-            Log.d("Innertube", "Player response for $videoId with ${clientType.clientName}")
-            responseText.chunked(3000).forEach { Log.d("Innertube", "Player chunk: $it") }
-
-            json.decodeFromString<PlayerResponse>(responseText)
-        } catch (e: Exception) {
-            Log.e("Innertube", "Player request failed: ${e.message}", e)
-            null
-        }
+            json.decodeFromString<PlayerResponse>(response.bodyAsText())
+        } catch (e: Exception) { null }
     }
 }

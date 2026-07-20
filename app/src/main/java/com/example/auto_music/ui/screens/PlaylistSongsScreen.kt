@@ -37,23 +37,31 @@ fun PlaylistSongsScreen(
     onPlay: (Song) -> Unit
 ) {
     val initialSongs by viewModel.getSongsInPlaylist(playlist.id).collectAsState(initial = emptyList())
-    var songs by remember { mutableStateOf(emptyList<Song>()) }
+    // Local state for dragging, initialized and reset when playlist.id changes
+    var songs by remember(playlist.id) { mutableStateOf(emptyList<Song>()) }
     
     val selectedSongs = remember { mutableStateListOf<Song>() }
     val isSelectionMode by remember { derivedStateOf { selectedSongs.isNotEmpty() } }
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
 
+    var draggedItemIndex by remember { mutableStateOf<Int?>(null) }
+    var dragOffsetY by remember { mutableFloatStateOf(0f) }
+    var initialIndex by remember { mutableStateOf<Int?>(null) }
+    var totalDragOffsetY by remember { mutableFloatStateOf(0f) }
+
     LaunchedEffect(initialSongs) {
-        if (songs.isEmpty() || songs.size != initialSongs.size) {
+        // Only update local list from database if not currently dragging
+        if (draggedItemIndex == null) {
+            val oldSize = songs.size
             songs = initialSongs
             
-            // Auto-scroll to last played song
-            if (playlist.lastPlayedSongId != null) {
+            // Auto-scroll to last played song only on first load
+            if (oldSize == 0 && playlist.lastPlayedSongId != null) {
                 val index = songs.indexOfFirst { it.id == playlist.lastPlayedSongId }
                 if (index != -1) {
                     coroutineScope.launch {
-                        listState.animateScrollToItem(index)
+                        listState.scrollToItem(index)
                     }
                 }
             }
@@ -97,11 +105,6 @@ fun PlaylistSongsScreen(
             )
         }
     ) { padding ->
-        var draggedItemIndex by remember { mutableStateOf<Int?>(null) }
-        var dragOffsetY by remember { mutableFloatStateOf(0f) }
-        var initialIndex by remember { mutableStateOf<Int?>(null) }
-        var totalDragOffsetY by remember { mutableFloatStateOf(0f) }
-
         LazyColumn(
             state = listState,
             modifier = Modifier.padding(padding).fillMaxSize().padding(horizontal = 16.dp)
@@ -148,7 +151,7 @@ fun PlaylistSongsScreen(
                         if (!isSelectionMode) {
                             Box(
                                 modifier = Modifier
-                                    .pointerInput(Unit) {
+                                    .pointerInput(songs) { // Re-bind input when list changes
                                         detectDragGesturesAfterLongPress(
                                             onDragStart = { 
                                                 initialIndex = index
@@ -161,6 +164,7 @@ fun PlaylistSongsScreen(
                                                 totalDragOffsetY += dragAmount.y
                                                 val targetIndex = (initialIndex!! + (totalDragOffsetY / itemHeightPx).toInt())
                                                     .coerceIn(0, songs.size - 1)
+
                                                 if (targetIndex != draggedItemIndex) {
                                                     val mutableSongs = songs.toMutableList()
                                                     val item = mutableSongs.removeAt(draggedItemIndex!!)

@@ -51,28 +51,24 @@ fun PlaylistSongsScreen(
 
     LaunchedEffect(initialSongs) {
         if (draggedItemIndex == null) {
-            val oldSize = songs.size
             songs = initialSongs
-            if (oldSize == 0 && playlist.lastPlayedSongId != null) {
-                val index = songs.indexOfFirst { it.id == playlist.lastPlayedSongId }
-                if (index != -1) coroutineScope.launch { listState.scrollToItem(index) }
+            if (playlist.lastPlayedSongId != null && songs.isNotEmpty()) {
+                val idx = songs.indexOfFirst { it.id == playlist.lastPlayedSongId }
+                if (idx != -1) coroutineScope.launch { listState.scrollToItem(idx) }
             }
         }
     }
 
     val density = androidx.compose.ui.platform.LocalDensity.current.density
-    val itemHeightPx = 100f * density 
+    val itemHeightPx = 80f * density // Adjusted for typical row height
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { if (isSelectionMode) Text("${selectedSongs.size} ${strings.selectedItems}") else Text(playlist.name) },
                 navigationIcon = {
-                    if (isSelectionMode) {
-                        IconButton(onClick = { selectedSongs.clear() }) { Icon(Icons.Default.Close, null) }
-                    } else {
-                        IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) }
-                    }
+                    if (isSelectionMode) IconButton(onClick = { selectedSongs.clear() }) { Icon(Icons.Default.Close, null) }
+                    else IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) }
                 },
                 actions = {
                     if (isSelectionMode) {
@@ -95,14 +91,15 @@ fun PlaylistSongsScreen(
                 
                 Card(
                     modifier = Modifier
+                        .animateItem() // Smooth sliding of other items
                         .fillMaxWidth()
                         .padding(vertical = 4.dp)
                         .zIndex(if (isDragging) 10f else 1f)
                         .graphicsLayer {
                             translationY = if (isDragging) dragOffsetY else 0f
-                            scaleX = if (isDragging) 1.05f else 1f
-                            scaleY = if (isDragging) 1.05f else 1f
-                            alpha = if (isDragging) 0.9f else 1f
+                            scaleX = if (isDragging) 1.03f else 1f
+                            scaleY = if (isDragging) 1.03f else 1f
+                            alpha = if (isDragging) 0.8f else 1f
                         }
                         .combinedClickable(
                             onClick = { if (isSelectionMode) { if (isSelected) selectedSongs.remove(song) else selectedSongs.add(song) } else onPlay(song) },
@@ -116,16 +113,27 @@ fun PlaylistSongsScreen(
                 ) {
                     Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                         if (!isSelectionMode) {
-                            // Drag handle: uses detectDragGestures (immediate) and blocks parent clicks
                             Box(
                                 modifier = Modifier
-                                    .pointerInput(songs) {
+                                    .pointerInput(Unit) { // Static key to prevent gesture cancellation during swap
                                         detectDragGestures(
-                                            onDragStart = { initialIndex = index; draggedItemIndex = index; totalDragOffsetY = 0f; dragOffsetY = 0f },
+                                            onDragStart = { 
+                                                // Find current index dynamically to handle list updates
+                                                val currentIdx = songs.indexOfFirst { it.id == song.id }
+                                                if (currentIdx != -1) {
+                                                    initialIndex = currentIdx
+                                                    draggedItemIndex = currentIdx
+                                                    totalDragOffsetY = 0f
+                                                    dragOffsetY = 0f
+                                                }
+                                            },
                                             onDrag = { change, dragAmount ->
                                                 change.consume()
+                                                if (draggedItemIndex == null || initialIndex == null) return@detectDragGestures
+                                                
                                                 totalDragOffsetY += dragAmount.y
                                                 val targetIndex = (initialIndex!! + (totalDragOffsetY / itemHeightPx).toInt()).coerceIn(0, songs.size - 1)
+                                                
                                                 if (targetIndex != draggedItemIndex) {
                                                     val mutableSongs = songs.toMutableList()
                                                     val item = mutableSongs.removeAt(draggedItemIndex!!)
@@ -135,11 +143,17 @@ fun PlaylistSongsScreen(
                                                 }
                                                 dragOffsetY = totalDragOffsetY - (draggedItemIndex!! - initialIndex!!) * itemHeightPx
                                             },
-                                            onDragEnd = { viewModel.reorderSongs(playlist.id, songs); draggedItemIndex = null },
-                                            onDragCancel = { draggedItemIndex = null }
+                                            onDragEnd = { 
+                                                viewModel.reorderSongs(playlist.id, songs)
+                                                draggedItemIndex = null
+                                                initialIndex = null
+                                            },
+                                            onDragCancel = { draggedItemIndex = null; initialIndex = null }
                                         )
                                     }
-                                    .padding(end = 8.dp)
+                                    .padding(end = 12.dp)
+                                    .size(32.dp),
+                                contentAlignment = Alignment.Center
                             ) { Icon(Icons.Default.DragHandle, null, tint = MaterialTheme.colorScheme.outline) }
                         } else {
                             Icon(if (isSelected) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked, null, modifier = Modifier.padding(end = 8.dp), tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline)
@@ -149,9 +163,8 @@ fun PlaylistSongsScreen(
                         Column(modifier = Modifier.weight(1f)) {
                             Text(song.title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                             Text(song.artist, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                            if (song.isDownloaded) Text("✓ Descarregada", style = MaterialTheme.typography.labelSmall, color = Color(0xFF4CAF50), fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
                         }
-                        if (!isSelectionMode) { IconButton(onClick = { onPlay(song) }) { Icon(Icons.Default.PlayArrow, null) } }
+                        if (!isSelectionMode) IconButton(onClick = { onPlay(song) }) { Icon(Icons.Default.PlayArrow, null) }
                     }
                 }
             }

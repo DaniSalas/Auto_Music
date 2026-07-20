@@ -25,9 +25,9 @@ abstract class MusicDatabase : RoomDatabase() {
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
                     MusicDatabase::class.java,
-                    "music_db"
+                    "music_database"
                 )
-                .fallbackToDestructiveMigration()
+                .fallbackToDestructiveMigration() // Critical for v6 update
                 .build()
                 INSTANCE = instance
                 instance

@@ -57,7 +57,6 @@ class MusicService : MediaLibraryService() {
         
         val resolvingDataSourceFactory = ResolvingDataSource.Factory(defaultDataSourceFactory) { dataSpec ->
             val uriString = dataSpec.uri.toString()
-            // Don't resolve local files or already resolved googlevideo URLs
             if (uriString.startsWith("file") || uriString.startsWith("content") || uriString.contains("googlevideo.com")) {
                 return@Factory dataSpec
             }
@@ -65,7 +64,6 @@ class MusicService : MediaLibraryService() {
             val videoId = dataSpec.key ?: uriString.substringAfter("v=", "").substringBefore("&")
             if (videoId.isEmpty()) return@Factory dataSpec
             
-            // Resolve YouTube stream URL
             val stream = try { 
                 runBlocking(Dispatchers.IO) { 
                     withTimeoutOrNull(8000) { InnertubeResolver.resolveStream(videoId) } 
@@ -118,7 +116,7 @@ class MusicService : MediaLibraryService() {
 
     override fun onCreate() {
         super.onCreate()
-        Log.d("MusicService", "onCreate: v4.35")
+        Log.d("MusicService", "onCreate: v4.36")
         serviceScope.launch { com.example.auto_music.data.remote.Innertube.fetchVisitorData() }
         cache = PlayerCache.getInstance(applicationContext)
         val database = MusicDatabase.getDatabase(applicationContext)

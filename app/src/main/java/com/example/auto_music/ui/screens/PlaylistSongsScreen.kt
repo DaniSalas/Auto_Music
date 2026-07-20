@@ -2,7 +2,7 @@ package com.example.auto_music.ui.screens
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -37,7 +37,6 @@ fun PlaylistSongsScreen(
     onPlay: (Song) -> Unit
 ) {
     val initialSongs by viewModel.getSongsInPlaylist(playlist.id).collectAsState(initial = emptyList())
-    // Local state for dragging, initialized and reset when playlist.id changes
     var songs by remember(playlist.id) { mutableStateOf(emptyList<Song>()) }
     
     val selectedSongs = remember { mutableStateListOf<Song>() }
@@ -51,19 +50,12 @@ fun PlaylistSongsScreen(
     var totalDragOffsetY by remember { mutableFloatStateOf(0f) }
 
     LaunchedEffect(initialSongs) {
-        // Only update local list from database if not currently dragging
         if (draggedItemIndex == null) {
             val oldSize = songs.size
             songs = initialSongs
-            
-            // Auto-scroll to last played song only on first load
             if (oldSize == 0 && playlist.lastPlayedSongId != null) {
                 val index = songs.indexOfFirst { it.id == playlist.lastPlayedSongId }
-                if (index != -1) {
-                    coroutineScope.launch {
-                        listState.scrollToItem(index)
-                    }
-                }
+                if (index != -1) coroutineScope.launch { listState.scrollToItem(index) }
             }
         }
     }
@@ -74,22 +66,12 @@ fun PlaylistSongsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { 
-                    if (isSelectionMode) {
-                        Text("${selectedSongs.size} ${strings.selectedItems}")
-                    } else {
-                        Text(playlist.name)
-                    }
-                },
+                title = { if (isSelectionMode) Text("${selectedSongs.size} ${strings.selectedItems}") else Text(playlist.name) },
                 navigationIcon = {
                     if (isSelectionMode) {
-                        IconButton(onClick = { selectedSongs.clear() }) {
-                            Icon(Icons.Default.Close, contentDescription = "Cancel·la")
-                        }
+                        IconButton(onClick = { selectedSongs.clear() }) { Icon(Icons.Default.Close, null) }
                     } else {
-                        IconButton(onClick = onBack) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Enrere")
-                        }
+                        IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) }
                     }
                 },
                 actions = {
@@ -97,9 +79,7 @@ fun PlaylistSongsScreen(
                         IconButton(onClick = {
                             selectedSongs.forEach { viewModel.removeSongFromPlaylist(it, playlist) }
                             selectedSongs.clear()
-                        }) {
-                            Icon(Icons.Default.Delete, contentDescription = "Elimina seleccionades", tint = MaterialTheme.colorScheme.error)
-                        }
+                        }) { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) }
                     }
                 }
             )
@@ -125,46 +105,27 @@ fun PlaylistSongsScreen(
                             alpha = if (isDragging) 0.9f else 1f
                         }
                         .combinedClickable(
-                            onClick = {
-                                if (isSelectionMode) {
-                                    if (isSelected) selectedSongs.remove(song) else selectedSongs.add(song)
-                                } else {
-                                    onPlay(song)
-                                }
-                            },
-                            onLongClick = {
-                                if (!isSelectionMode) selectedSongs.add(song)
-                            }
+                            onClick = { if (isSelectionMode) { if (isSelected) selectedSongs.remove(song) else selectedSongs.add(song) } else onPlay(song) },
+                            onLongClick = { if (!isSelectionMode) selectedSongs.add(song) }
                         ),
-                    colors = CardDefaults.cardColors(
-                        containerColor = when {
-                            isDragging -> MaterialTheme.colorScheme.surfaceVariant
-                            isSelected -> MaterialTheme.colorScheme.primaryContainer
-                            else -> MaterialTheme.colorScheme.surface
-                        }
-                    )
+                    colors = CardDefaults.cardColors(containerColor = when {
+                        isDragging -> MaterialTheme.colorScheme.surfaceVariant
+                        isSelected -> MaterialTheme.colorScheme.primaryContainer
+                        else -> MaterialTheme.colorScheme.surface
+                    })
                 ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
+                    Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                         if (!isSelectionMode) {
+                            // Drag handle: uses detectDragGestures (immediate) and blocks parent clicks
                             Box(
                                 modifier = Modifier
-                                    .pointerInput(songs) { // Re-bind input when list changes
-                                        detectDragGesturesAfterLongPress(
-                                            onDragStart = { 
-                                                initialIndex = index
-                                                draggedItemIndex = index
-                                                totalDragOffsetY = 0f
-                                                dragOffsetY = 0f
-                                            },
+                                    .pointerInput(songs) {
+                                        detectDragGestures(
+                                            onDragStart = { initialIndex = index; draggedItemIndex = index; totalDragOffsetY = 0f; dragOffsetY = 0f },
                                             onDrag = { change, dragAmount ->
                                                 change.consume()
                                                 totalDragOffsetY += dragAmount.y
-                                                val targetIndex = (initialIndex!! + (totalDragOffsetY / itemHeightPx).toInt())
-                                                    .coerceIn(0, songs.size - 1)
-
+                                                val targetIndex = (initialIndex!! + (totalDragOffsetY / itemHeightPx).toInt()).coerceIn(0, songs.size - 1)
                                                 if (targetIndex != draggedItemIndex) {
                                                     val mutableSongs = songs.toMutableList()
                                                     val item = mutableSongs.removeAt(draggedItemIndex!!)
@@ -174,39 +135,23 @@ fun PlaylistSongsScreen(
                                                 }
                                                 dragOffsetY = totalDragOffsetY - (draggedItemIndex!! - initialIndex!!) * itemHeightPx
                                             },
-                                            onDragEnd = { 
-                                                viewModel.reorderSongs(playlist.id, songs)
-                                                draggedItemIndex = null
-                                            },
+                                            onDragEnd = { viewModel.reorderSongs(playlist.id, songs); draggedItemIndex = null },
                                             onDragCancel = { draggedItemIndex = null }
                                         )
                                     }
                                     .padding(end = 8.dp)
-                            ) {
-                                Icon(Icons.Default.DragHandle, contentDescription = "Reordena", tint = MaterialTheme.colorScheme.outline)
-                            }
+                            ) { Icon(Icons.Default.DragHandle, null, tint = MaterialTheme.colorScheme.outline) }
                         } else {
-                            Icon(
-                                if (isSelected) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
-                                contentDescription = null,
-                                modifier = Modifier.padding(end = 8.dp),
-                                tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
-                            )
+                            Icon(if (isSelected) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked, null, modifier = Modifier.padding(end = 8.dp), tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline)
                         }
 
                         AsyncImage(model = song.thumbnailUrl, contentDescription = null, modifier = Modifier.size(56.dp).padding(end = 8.dp), contentScale = ContentScale.Crop)
                         Column(modifier = Modifier.weight(1f)) {
                             Text(song.title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                             Text(song.artist, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                            if (song.isDownloaded) {
-                                Text("✓ Descarregada", style = MaterialTheme.typography.labelSmall, color = Color(0xFF4CAF50), fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
-                            }
+                            if (song.isDownloaded) Text("✓ Descarregada", style = MaterialTheme.typography.labelSmall, color = Color(0xFF4CAF50), fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
                         }
-                        if (!isSelectionMode) {
-                            IconButton(onClick = { onPlay(song) }) {
-                                Icon(Icons.Default.PlayArrow, contentDescription = "Reprodueix")
-                            }
-                        }
+                        if (!isSelectionMode) { IconButton(onClick = { onPlay(song) }) { Icon(Icons.Default.PlayArrow, null) } }
                     }
                 }
             }

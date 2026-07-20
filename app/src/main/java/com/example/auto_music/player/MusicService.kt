@@ -93,7 +93,7 @@ class MusicService : MediaLibraryService() {
 
     override fun onCreate() {
         super.onCreate()
-        Log.d("MusicService", "onCreate: v4.31")
+        Log.d("MusicService", "onCreate: v4.32")
         serviceScope.launch { com.example.auto_music.data.remote.Innertube.fetchVisitorData() }
         cache = PlayerCache.getInstance(applicationContext)
         val database = MusicDatabase.getDatabase(applicationContext)
@@ -163,7 +163,6 @@ class MusicService : MediaLibraryService() {
                 val firstItem = mediaItems.firstOrNull() ?: run { future.set(MediaSession.MediaItemsWithStartPosition(mediaItems, startIndex, startPositionMs)); return@launch }
                 val targetMId = mediaItems[startIndex].mediaId
                 
-                // Non-destructive check: if the requested item is already part of the current timeline, return the timeline as is.
                 val currentPlayer = player
                 var alreadyInTimeline = false
                 val currentItems = mutableListOf<MediaItem>()
@@ -172,7 +171,8 @@ class MusicService : MediaLibraryService() {
                     for (i in 0 until currentPlayer.mediaItemCount) {
                         val item = currentPlayer.getMediaItemAt(i)
                         currentItems.add(item)
-                        if (item.mediaId == targetMId) {
+                        // Precise match: match either full ID or the song ID part
+                        if (item.mediaId == targetMId || (item.mediaId.contains("|") && item.mediaId.substringAfter("|") == targetMId)) {
                             alreadyInTimeline = true
                             existingIndex = i
                         }
@@ -187,7 +187,9 @@ class MusicService : MediaLibraryService() {
                     if (playlistId != null) {
                         val songs = repository.getSongsInPlaylist(playlistId).first()
                         val expandedItems = songs.map { createMediaItem(it, playlistId) }
-                        val index = expandedItems.indexOfFirst { it.mediaId == targetMId }.coerceAtLeast(0)
+                        val index = expandedItems.indexOfFirst { 
+                            it.mediaId == targetMId || (it.mediaId.contains("|") && it.mediaId.substringAfter("|") == targetMId)
+                        }.coerceAtLeast(0)
                         Log.d("MusicService", "Expanding timeline for $playlistId. Target index $index")
                         future.set(MediaSession.MediaItemsWithStartPosition(expandedItems, index, startPositionMs))
                     } else {

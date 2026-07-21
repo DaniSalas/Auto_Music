@@ -64,6 +64,12 @@ class MainViewModel(
         return repository.getSongsInPlaylist(playlistId)
     }
 
+    fun checkAndDownloadPlaylist(playlistId: Long) {
+        viewModelScope.launch {
+            repository.checkAndDownloadPlaylistSongs(playlistId)
+        }
+    }
+
     fun removeSongFromPlaylist(song: Song, playlist: Playlist) {
         viewModelScope.launch {
             repository.removeSongFromPlaylist(song, playlist.id)

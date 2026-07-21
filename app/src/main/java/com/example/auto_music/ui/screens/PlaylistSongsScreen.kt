@@ -49,6 +49,10 @@ fun PlaylistSongsScreen(
     var initialIndex by remember { mutableStateOf<Int?>(null) }
     var totalDragOffsetY by remember { mutableFloatStateOf(0f) }
 
+    LaunchedEffect(playlist.id) {
+        viewModel.checkAndDownloadPlaylist(playlist.id)
+    }
+
     LaunchedEffect(initialSongs) {
         if (draggedItemIndex == null) {
             songs = initialSongs
@@ -163,6 +167,9 @@ fun PlaylistSongsScreen(
                         Column(modifier = Modifier.weight(1f)) {
                             Text(song.title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                             Text(song.artist, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                            if (song.isDownloaded) {
+                                Text("✓ Descarregada", style = MaterialTheme.typography.labelSmall, color = Color(0xFF4CAF50), fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                            }
                         }
                         if (!isSelectionMode) IconButton(onClick = { onPlay(song) }) { Icon(Icons.Default.PlayArrow, null) }
                     }

@@ -91,12 +91,26 @@ class MusicRepository(
             musicDao.insertSongToPlaylist(PlaylistSongCrossRef(playlistId, song.id, maxPos + 1))
         }
         
+        // Re-fetch to get latest state
         val current = musicDao.getSongById(song.id) ?: song
         if (!current.isDownloaded) {
-            val p = musicDao.getPlaylistById(playlistId)
-            val sp = context.getSharedPreferences("AutoMusicPrefs", Context.MODE_PRIVATE)
-            val should = if (p?.isPublic == true) sp.getBoolean("auto_download_public", true) else sp.getBoolean("auto_download_private", true)
-            if (should) downloadSong(current)
+            triggerAutoDownload(current, playlistId)
+        }
+    }
+
+    private suspend fun triggerAutoDownload(song: Song, playlistId: Long) {
+        val p = musicDao.getPlaylistById(playlistId)
+        val sp = context.getSharedPreferences("AutoMusicPrefs", Context.MODE_PRIVATE)
+        val should = if (p?.isPublic == true) sp.getBoolean("auto_download_public", true) else sp.getBoolean("auto_download_private", true)
+        if (should) downloadSong(song)
+    }
+
+    suspend fun checkAndDownloadPlaylistSongs(playlistId: Long) {
+        val songs = musicDao.getSongsInPlaylist(playlistId).first()
+        songs.forEach { song ->
+            if (!song.isDownloaded) {
+                triggerAutoDownload(song, playlistId)
+            }
         }
     }
 

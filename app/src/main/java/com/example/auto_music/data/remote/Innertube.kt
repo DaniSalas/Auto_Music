@@ -22,15 +22,12 @@ import kotlinx.serialization.json.*
 import com.example.auto_music.data.remote.model.PlayerResponse
 import com.example.auto_music.data.remote.model.YouTubeClient
 import java.util.concurrent.TimeUnit
+import okhttp3.ConnectionPool
+import okhttp3.Protocol
 
 object InnertubeConstants {
     const val YOUTUBE_MUSIC_URL = "https://music.youtube.com"
-    const val CHROME_WINDOWS_VISITOR_DATA = "Cgtfa01kaENlQ0p4Zyj938LFBjIKCgJVUxIEGgAgLw%3D%3D"
-    const val CHROME_WINDOWS_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.3"
-    const val API_KEY = "AIzaSyDyT5W0Jh49F30Pqqtyfdf7pDLFKLJoAnw"
-    const val CLIENT_NAME = "WEB_REMIX"
-    const val X_CLIENT_NAME = "67"
-    const val CLIENT_VERSION = "1.20260213.01.00"
+    const val YOUTUBE_URL = "https://www.youtube.com"
 }
 
 object Innertube {
@@ -40,59 +37,102 @@ object Innertube {
         install(ContentNegotiation) { json(json) }
         engine {
             config {
+                connectionPool(ConnectionPool(10, 5, TimeUnit.MINUTES))
                 connectTimeout(15, TimeUnit.SECONDS)
-                readTimeout(15, TimeUnit.SECONDS)
-                writeTimeout(15, TimeUnit.SECONDS)
+                readTimeout(20, TimeUnit.SECONDS)
+                writeTimeout(20, TimeUnit.SECONDS)
+                protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
+                retryOnConnectionFailure(true)
             }
         }
     }
 
-    var visitorData: String = InnertubeConstants.CHROME_WINDOWS_VISITOR_DATA
+    var visitorData: String? = null
+    private const val DEFAULT_STS = 20492
 
     suspend fun fetchVisitorData() {
         try {
-            val response = client.get("https://music.youtube.com/sw.js_data") {
-                userAgent(InnertubeConstants.CHROME_WINDOWS_USER_AGENT)
+            // Try different endpoints to get valid visitor data
+            val response = client.get("${InnertubeConstants.YOUTUBE_URL}/?theme=true") {
+                userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.3")
             }
             val text = response.bodyAsText()
-            Regex("Cg[a-zA-Z0-9_-]{35,45}").find(text)?.value?.let {
+            Regex("ytcfg\\.set\\(\\{.*?\"VISITOR_DATA\":\"(.*?)\"").find(text)?.groupValues?.get(1)?.let {
                 visitorData = it
-                Log.i("Innertube", "Updated visitorData: $it")
+                Log.i("Innertube", "Fetched visitorData from root: $it")
+                return
             }
-        } catch (e: Exception) { Log.w("Innertube", "fetchVisitorData failed, using fallback") }
+            
+            val swResponse = client.get("${InnertubeConstants.YOUTUBE_MUSIC_URL}/sw.js_data")
+            if (swResponse.status.value in 200..299) {
+                Regex("Cg[a-zA-Z0-9_-]{35,45}").find(swResponse.bodyAsText())?.value?.let {
+                    visitorData = it
+                    Log.i("Innertube", "Fetched visitorData from sw: $it")
+                }
+            }
+        } catch (e: Exception) { 
+            Log.w("Innertube", "fetchVisitorData failed: ${e.message}") 
+        }
     }
 
     suspend fun search(query: String): InnerTubeResponse? {
         return try {
-            val context = InnerTubeContext(client = InnerTubeClient(clientName = InnertubeConstants.CLIENT_NAME, clientVersion = InnertubeConstants.CLIENT_VERSION, hl = "en", gl = "US", visitorData = visitorData, userAgent = InnertubeConstants.CHROME_WINDOWS_USER_AGENT, referer = "${InnertubeConstants.YOUTUBE_MUSIC_URL}/"))
+            val clientType = YouTubeClient.WEB_REMIX
+            val context = clientType.toContext(visitorData)
             val response = client.post("${InnertubeConstants.YOUTUBE_MUSIC_URL}/youtubei/v1/search") {
                 contentType(ContentType.Application.Json)
-                header("X-YouTube-Client-Name", InnertubeConstants.X_CLIENT_NAME)
-                header("X-YouTube-Client-Version", InnertubeConstants.CLIENT_VERSION)
-                header("X-Goog-Visitor-Id", visitorData)
-                userAgent(InnertubeConstants.CHROME_WINDOWS_USER_AGENT)
-                parameter("key", InnertubeConstants.API_KEY)
+                header("X-YouTube-Client-Name", clientType.clientId)
+                header("X-YouTube-Client-Version", clientType.clientVersion)
+                header("X-Goog-Api-Key", clientType.apiKey)
+                header("X-Origin", InnertubeConstants.YOUTUBE_MUSIC_URL)
+                header("X-Goog-Api-Format-Version", "1")
+                header(HttpHeaders.Referrer, "${InnertubeConstants.YOUTUBE_MUSIC_URL}/")
+                visitorData?.let { header("X-Goog-Visitor-Id", it) }
+                userAgent(clientType.userAgent)
+                parameter("key", clientType.apiKey)
                 setBody(SearchBody(query = query, context = context))
             }
-            json.decodeFromString<InnerTubeResponse>(response.bodyAsText())
+            response.body<InnerTubeResponse>()
         } catch (e: Exception) { null }
     }
 
     suspend fun player(videoId: String, clientType: YouTubeClient): PlayerResponse? {
         return try {
             val context = clientType.toContext(visitorData)
-            val body = PlayerBody(context = context, videoId = videoId, cpn = (1..16).map { "abcdefghijklmnopqrstuvwxyz0123456789".random() }.joinToString(""), playbackContext = PlayerBody.PlaybackContext(PlayerBody.PlaybackContext.ContentPlaybackContext(20465)))
-            val baseUrl = if (clientType.isMusic) InnertubeConstants.YOUTUBE_MUSIC_URL else "https://www.youtube.com"
+            val body = PlayerBody(
+                context = context,
+                videoId = videoId,
+                playbackContext = if (clientType.useSignatureTimestamp) {
+                    PlayerBody.PlaybackContext(
+                        PlayerBody.PlaybackContext.ContentPlaybackContext(signatureTimestamp = DEFAULT_STS)
+                    )
+                } else null
+            )
+            
+            val baseUrl = if (clientType.isMusic) InnertubeConstants.YOUTUBE_MUSIC_URL else InnertubeConstants.YOUTUBE_URL
             val response = client.post("${baseUrl}/youtubei/v1/player") {
                 contentType(ContentType.Application.Json)
+                header("X-Goog-Api-Format-Version", "1")
                 header("X-YouTube-Client-Name", clientType.clientId)
                 header("X-YouTube-Client-Version", clientType.clientVersion)
-                header("X-Goog-Visitor-Id", visitorData)
+                header("X-Goog-Api-Key", clientType.apiKey)
+                visitorData?.let { header("X-Goog-Visitor-Id", it) }
+                
+                if (clientType.isMusic) {
+                    header("X-Origin", InnertubeConstants.YOUTUBE_MUSIC_URL)
+                    header(HttpHeaders.Referrer, "${InnertubeConstants.YOUTUBE_MUSIC_URL}/")
+                } else if (clientType.isEmbedded) {
+                    header("Referer", "https://www.youtube.com/embed/$videoId")
+                } else {
+                    header("Referer", "https://www.youtube.com/watch?v=$videoId")
+                }
+                
                 userAgent(clientType.userAgent)
                 parameter("key", clientType.apiKey)
                 setBody(body)
             }
-            json.decodeFromString<PlayerResponse>(response.bodyAsText())
+            if (response.status.value !in 200..299) return null
+            response.body<PlayerResponse>()
         } catch (e: Exception) { null }
     }
 }

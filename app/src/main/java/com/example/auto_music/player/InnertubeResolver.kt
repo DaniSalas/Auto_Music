@@ -2,8 +2,6 @@ package com.example.auto_music.player
 
 import com.example.auto_music.data.remote.Innertube
 import com.example.auto_music.data.remote.model.YouTubeClient
-import io.ktor.client.request.get
-import io.ktor.client.request.header
 import android.util.Log
 
 object InnertubeResolver {
@@ -20,24 +18,33 @@ object InnertubeResolver {
             if (System.currentTimeMillis() < expiry) return stream
         }
 
-        // Optimized order: TESTSUITE and TVHTML5 are most reliable for direct URLs
+        // Ordered list of clients to try for direct audio URLs
         val clients = listOf(
             YouTubeClient.ANDROID_TESTSUITE,
             YouTubeClient.TVHTML5_EMBEDDED,
             YouTubeClient.ANDROID_VR,
-            YouTubeClient.ANDROID_MUSIC,
-            YouTubeClient.WEB_REMIX
+            YouTubeClient.IOS
         )
 
         for (client in clients) {
-            val response = try { Innertube.player(videoId, client) } catch (e: Exception) { null }
-            if (response?.playabilityStatus?.status != "OK") continue
+            Log.d(TAG, "Resolving $videoId using ${client.clientName}...")
+            val response = try { 
+                Innertube.player(videoId, client) 
+            } catch (e: Exception) { 
+                null 
+            }
 
-            val url = extractUrl(response)
-            if (url != null) {
-                val stream = ResolvedStream(url, client.userAgent)
-                cacheStream(videoId, stream, response.streamingData?.expiresInSeconds)
-                return stream
+            if (response?.playabilityStatus?.status == "OK") {
+                val url = extractUrl(response)
+                if (url != null) {
+                    val stream = ResolvedStream(url, client.userAgent)
+                    val expiresIn = response.streamingData?.expiresInSeconds?.toLong() ?: 21600L
+                    cachedUrls[videoId] = stream to (System.currentTimeMillis() + (expiresIn * 1000) - 60000)
+                    Log.i(TAG, "✅ SUCCESS: $videoId resolved with ${client.clientName}")
+                    return stream
+                }
+            } else {
+                Log.w(TAG, "❌ FAILED: ${client.clientName} for $videoId. Status: ${response?.playabilityStatus?.status}")
             }
         }
         return null
@@ -46,18 +53,28 @@ object InnertubeResolver {
     private fun extractUrl(response: com.example.auto_music.data.remote.model.PlayerResponse?): String? {
         val streamingData = response?.streamingData ?: return null
         val formats = (streamingData.adaptiveFormats ?: emptyList()) + (streamingData.formats ?: emptyList())
+        
         val audioFormats = formats.filter { it.isAudio }
         
-        // Prefer direct URLs to avoid complex signature decryption
-        val audioFormat = audioFormats.find { it.url != null } 
-            ?: audioFormats.firstOrNull() 
-            ?: formats.firstOrNull()
-            
-        var url = audioFormat?.url
-        if (url == null && audioFormat?.signatureCipher != null) {
-            url = decodeSignatureCipher(audioFormat.signatureCipher)
+        // 1. First priority: itag 140 (M4A) with direct URL
+        val m4aDirect = audioFormats.find { it.itag == 140 && it.url != null }
+        if (m4aDirect?.url != null) return m4aDirect.url
+
+        // 2. Second priority: Any audio format with direct URL
+        val anyAudioDirect = audioFormats.find { it.url != null }
+        if (anyAudioDirect?.url != null) return anyAudioDirect.url
+
+        // 3. Third priority: Any direct URL
+        val anyDirect = formats.find { it.url != null }
+        if (anyDirect?.url != null) return anyDirect.url
+
+        // 4. Fallback: Extract from signatureCipher (no deobfuscation yet)
+        val cipherFormat = audioFormats.find { it.signatureCipher != null } ?: formats.find { it.signatureCipher != null }
+        if (cipherFormat?.signatureCipher != null) {
+            return decodeSignatureCipher(cipherFormat.signatureCipher)
         }
-        return url
+        
+        return null
     }
 
     private fun decodeSignatureCipher(cipher: String): String? {
@@ -73,10 +90,5 @@ object InnertubeResolver {
             val connector = if (baseUrl.contains("?")) "&" else "?"
             "$baseUrl$connector$sp=$signature"
         } catch (e: Exception) { null }
-    }
-
-    private fun cacheStream(videoId: String, stream: ResolvedStream, expiresInSeconds: Int?) {
-        val expiresIn = expiresInSeconds?.toLong() ?: 21600L
-        cachedUrls[videoId] = stream to (System.currentTimeMillis() + (expiresIn * 1000) - 60000)
     }
 }

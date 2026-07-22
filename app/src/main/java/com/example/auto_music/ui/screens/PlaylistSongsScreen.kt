@@ -20,11 +20,14 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import androidx.compose.ui.platform.LocalContext
+import android.content.Context
 import coil.compose.AsyncImage
 import com.example.auto_music.model.Playlist
 import com.example.auto_music.model.Song
 import com.example.auto_music.ui.MainViewModel
 import com.example.auto_music.AppTranslations
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -43,6 +46,7 @@ fun PlaylistSongsScreen(
     val isSelectionMode by remember { derivedStateOf { selectedSongs.isNotEmpty() } }
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
+    val context = LocalContext.current
 
     var draggedItemIndex by remember { mutableStateOf<Int?>(null) }
     var dragOffsetY by remember { mutableFloatStateOf(0f) }
@@ -64,7 +68,7 @@ fun PlaylistSongsScreen(
     }
 
     val density = androidx.compose.ui.platform.LocalDensity.current.density
-    val itemHeightPx = 80f * density // Adjusted for typical row height
+    val itemHeightPx = 80f * density 
 
     Scaffold(
         topBar = {
@@ -93,9 +97,27 @@ fun PlaylistSongsScreen(
                 val isDragging = draggedItemIndex == index
                 val isSelected = selectedSongs.contains(song)
                 
+                // Real-time download status logic
+                var downloadStatus by remember(song.id, song.isDownloaded) { 
+                    mutableStateOf(getDownloadStatusText(context, song)) 
+                }
+                
+                LaunchedEffect(song.id, song.isDownloaded) {
+                    if (song.isDownloaded) {
+                        downloadStatus = "✓ Descarregada"
+                    } else {
+                        while (true) {
+                            val current = getDownloadStatusText(context, song)
+                            if (current != downloadStatus) downloadStatus = current
+                            if (current == "✓ Descarregada") break
+                            delay(2000) // Poll for status updates
+                        }
+                    }
+                }
+
                 Card(
                     modifier = Modifier
-                        .animateItem() // Smooth sliding of other items
+                        .animateItem()
                         .fillMaxWidth()
                         .padding(vertical = 4.dp)
                         .zIndex(if (isDragging) 10f else 1f)
@@ -119,25 +141,17 @@ fun PlaylistSongsScreen(
                         if (!isSelectionMode) {
                             Box(
                                 modifier = Modifier
-                                    .pointerInput(Unit) { // Static key to prevent gesture cancellation during swap
+                                    .pointerInput(Unit) {
                                         detectDragGestures(
                                             onDragStart = { 
-                                                // Find current index dynamically to handle list updates
                                                 val currentIdx = songs.indexOfFirst { it.id == song.id }
-                                                if (currentIdx != -1) {
-                                                    initialIndex = currentIdx
-                                                    draggedItemIndex = currentIdx
-                                                    totalDragOffsetY = 0f
-                                                    dragOffsetY = 0f
-                                                }
+                                                if (currentIdx != -1) { initialIndex = currentIdx; draggedItemIndex = currentIdx; totalDragOffsetY = 0f; dragOffsetY = 0f }
                                             },
                                             onDrag = { change, dragAmount ->
                                                 change.consume()
                                                 if (draggedItemIndex == null || initialIndex == null) return@detectDragGestures
-                                                
                                                 totalDragOffsetY += dragAmount.y
                                                 val targetIndex = (initialIndex!! + (totalDragOffsetY / itemHeightPx).toInt()).coerceIn(0, songs.size - 1)
-                                                
                                                 if (targetIndex != draggedItemIndex) {
                                                     val mutableSongs = songs.toMutableList()
                                                     val item = mutableSongs.removeAt(draggedItemIndex!!)
@@ -147,11 +161,7 @@ fun PlaylistSongsScreen(
                                                 }
                                                 dragOffsetY = totalDragOffsetY - (draggedItemIndex!! - initialIndex!!) * itemHeightPx
                                             },
-                                            onDragEnd = { 
-                                                viewModel.reorderSongs(playlist.id, songs)
-                                                draggedItemIndex = null
-                                                initialIndex = null
-                                            },
+                                            onDragEnd = { viewModel.reorderSongs(playlist.id, songs); draggedItemIndex = null; initialIndex = null },
                                             onDragCancel = { draggedItemIndex = null; initialIndex = null }
                                         )
                                     }
@@ -167,9 +177,13 @@ fun PlaylistSongsScreen(
                         Column(modifier = Modifier.weight(1f)) {
                             Text(song.title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                             Text(song.artist, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                            if (song.isDownloaded) {
-                                Text("✓ Descarregada", style = MaterialTheme.typography.labelSmall, color = Color(0xFF4CAF50), fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                            
+                            val statusColor = when (downloadStatus) {
+                                "✓ Descarregada" -> Color(0xFF4CAF50)
+                                "⏳ Descarregant..." -> Color(0xFFFF9800)
+                                else -> Color.Gray
                             }
+                            Text(downloadStatus, style = MaterialTheme.typography.labelSmall, color = statusColor, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
                         }
                         if (!isSelectionMode) IconButton(onClick = { onPlay(song) }) { Icon(Icons.Default.PlayArrow, null) }
                     }
@@ -178,4 +192,11 @@ fun PlaylistSongsScreen(
             item { Spacer(Modifier.height(80.dp)) }
         }
     }
+}
+
+private fun getDownloadStatusText(context: Context, song: Song): String {
+    if (song.isDownloaded) return "✓ Descarregada"
+    val sp = context.getSharedPreferences("downloads", Context.MODE_PRIVATE)
+    if (sp.getBoolean("pending_${song.id}", false)) return "⏳ Descarregant..."
+    return "🌐 Online"
 }

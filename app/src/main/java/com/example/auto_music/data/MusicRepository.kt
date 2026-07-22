@@ -91,27 +91,7 @@ class MusicRepository(
             musicDao.insertSongToPlaylist(PlaylistSongCrossRef(playlistId, song.id, maxPos + 1))
         }
         
-        // Re-fetch to get latest state
-        val current = musicDao.getSongById(song.id) ?: song
-        if (!current.isDownloaded) {
-            triggerAutoDownload(current, playlistId)
-        }
-    }
-
-    private suspend fun triggerAutoDownload(song: Song, playlistId: Long) {
-        val p = musicDao.getPlaylistById(playlistId)
-        val sp = context.getSharedPreferences("AutoMusicPrefs", Context.MODE_PRIVATE)
-        val should = if (p?.isPublic == true) sp.getBoolean("auto_download_public", true) else sp.getBoolean("auto_download_private", true)
-        if (should) downloadSong(song)
-    }
-
-    suspend fun checkAndDownloadPlaylistSongs(playlistId: Long) {
-        val songs = musicDao.getSongsInPlaylist(playlistId).first()
-        songs.forEach { song ->
-            if (!song.isDownloaded) {
-                triggerAutoDownload(song, playlistId)
-            }
-        }
+        checkAndDownloadPlaylistSongs(playlistId)
     }
 
     suspend fun updateSongOrder(playlistId: Long, songs: List<Song>) = musicDao.updateSongOrder(playlistId, songs.map { it.id })
@@ -132,20 +112,53 @@ class MusicRepository(
 
     fun getSongsInPlaylist(playlistId: Long): Flow<List<Song>> = musicDao.getSongsInPlaylist(playlistId)
 
+    suspend fun checkAndDownloadPlaylistSongs(playlistId: Long) {
+        val p = musicDao.getPlaylistById(playlistId) ?: return
+        val sp = context.getSharedPreferences("AutoMusicPrefs", Context.MODE_PRIVATE)
+        val shouldDownload = if (p.isPublic) sp.getBoolean("auto_download_public", true) else sp.getBoolean("auto_download_private", true)
+        if (!shouldDownload) return
+
+        val songs = musicDao.getSongsInPlaylist(playlistId).first()
+        songs.forEach { song ->
+            val file = File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "auto_music/${song.id}.mp3")
+            if (!song.isDownloaded || !file.exists()) {
+                downloadSong(song)
+            }
+        }
+    }
+
     fun downloadSong(song: Song) {
         val sp = context.getSharedPreferences("downloads", Context.MODE_PRIVATE)
         if (sp.contains("pending_${song.id}")) return
+        
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val stream = com.example.auto_music.player.InnertubeResolver.resolveStream(song.id) ?: return@launch
+                Log.i("MusicRepository", "Resolving stream for download: ${song.title}")
+                val stream = com.example.auto_music.player.InnertubeResolver.resolveStream(song.id) ?: run {
+                    Log.e("MusicRepository", "Could not resolve stream for ${song.title}")
+                    return@launch
+                }
+                
                 val fileName = "${song.id}.mp3"; val dir = File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "auto_music")
                 if (!dir.exists()) dir.mkdirs()
+                
                 val file = File(dir, fileName)
                 if (file.exists()) { updateSongDownloadStatus(song.id, file.absolutePath); return@launch }
-                val request = DownloadManager.Request(Uri.parse(stream.url)).setTitle("Auto Music: ${song.title}").setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, "auto_music/$fileName").setNotificationVisibility(DownloadManager.Request.VISIBILITY_HIDDEN).addRequestHeader("User-Agent", stream.userAgent).addRequestHeader("Referer", "https://music.youtube.com/")
+                
+                Log.i("MusicRepository", "Starting download: ${song.title} from ${stream.url.take(50)}...")
+                val request = DownloadManager.Request(Uri.parse(stream.url))
+                    .setTitle("Auto Music: ${song.title}")
+                    .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, "auto_music/$fileName")
+                    .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                    .addRequestHeader("User-Agent", stream.userAgent)
+                    .addRequestHeader("Referer", "https://www.youtube.com/")
+
                 val downloadId = (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
                 sp.edit().putString(downloadId.toString(), song.id).putBoolean("pending_${song.id}", true).apply()
-            } catch (e: Exception) { sp.edit().remove("pending_${song.id}").apply() }
+            } catch (e: Exception) { 
+                Log.e("MusicRepository", "Download enqueue error: ${e.message}")
+                sp.edit().remove("pending_${song.id}").apply() 
+            }
         }
     }
 }

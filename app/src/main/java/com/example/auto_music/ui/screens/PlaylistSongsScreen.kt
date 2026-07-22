@@ -99,17 +99,17 @@ fun PlaylistSongsScreen(
                 
                 // Real-time download status logic
                 var downloadStatus by remember(song.id, song.isDownloaded) { 
-                    mutableStateOf(getDownloadStatusText(context, song)) 
+                    mutableStateOf(getDownloadStatusText(context, song, strings)) 
                 }
                 
                 LaunchedEffect(song.id, song.isDownloaded) {
                     if (song.isDownloaded) {
-                        downloadStatus = "✓ Descarregada"
+                        downloadStatus = strings.downloaded
                     } else {
                         while (true) {
-                            val current = getDownloadStatusText(context, song)
+                            val current = getDownloadStatusText(context, song, strings)
                             if (current != downloadStatus) downloadStatus = current
-                            if (current == "✓ Descarregada") break
+                            if (current == strings.downloaded) break
                             delay(2000) // Poll for status updates
                         }
                     }
@@ -179,8 +179,8 @@ fun PlaylistSongsScreen(
                             Text(song.artist, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                             
                             val statusColor = when (downloadStatus) {
-                                "✓ Descarregada" -> Color(0xFF4CAF50)
-                                "⏳ Descarregant..." -> Color(0xFFFF9800)
+                                strings.downloaded -> Color(0xFF4CAF50)
+                                strings.downloading -> Color(0xFFFF9800)
                                 else -> Color.Gray
                             }
                             Text(downloadStatus, style = MaterialTheme.typography.labelSmall, color = statusColor, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
@@ -194,9 +194,9 @@ fun PlaylistSongsScreen(
     }
 }
 
-private fun getDownloadStatusText(context: Context, song: Song): String {
-    if (song.isDownloaded) return "✓ Descarregada"
+private fun getDownloadStatusText(context: Context, song: Song, strings: AppTranslations): String {
+    if (song.isDownloaded) return strings.downloaded
     val sp = context.getSharedPreferences("downloads", Context.MODE_PRIVATE)
-    if (sp.getBoolean("pending_${song.id}", false)) return "⏳ Descarregant..."
-    return "🌐 Online"
+    if (sp.getBoolean("pending_${song.id}", false)) return strings.downloading
+    return strings.online
 }

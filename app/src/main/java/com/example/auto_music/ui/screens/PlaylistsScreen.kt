@@ -38,7 +38,7 @@ fun PlaylistsScreen(
             CenterAlignedTopAppBar(
                 title = { 
                     if (isSelectionMode) {
-                        Text("${selectedPlaylists.size} seleccionades")
+                        Text("${selectedPlaylists.size} ${strings.selectedItems}")
                     } else {
                         Text(strings.playlists)
                     }
@@ -46,7 +46,7 @@ fun PlaylistsScreen(
                 navigationIcon = {
                     if (isSelectionMode) {
                         IconButton(onClick = { selectedPlaylists.clear() }) {
-                            Icon(Icons.Default.Close, contentDescription = "Cancel·la")
+                            Icon(Icons.Default.Close, contentDescription = strings.cancel)
                         }
                     }
                 },
@@ -56,15 +56,15 @@ fun PlaylistsScreen(
                             selectedPlaylists.forEach { viewModel.deletePlaylist(it) }
                             selectedPlaylists.clear()
                         }) {
-                            Icon(Icons.Default.Delete, contentDescription = "Elimina seleccionades", tint = MaterialTheme.colorScheme.error)
+                            Icon(Icons.Default.Delete, contentDescription = strings.deletePlaylist, tint = MaterialTheme.colorScheme.error)
                         }
                     } else {
                         IconButton(onClick = { showCreateDialog = true }) {
-                            Icon(Icons.Default.Add, contentDescription = "Crea llista")
+                            Icon(Icons.Default.Add, contentDescription = strings.newPlaylist)
                         }
                         if (onManualSync != null) {
                             IconButton(onClick = onManualSync) {
-                                Icon(Icons.Default.Sync, contentDescription = "Sincronitza")
+                                Icon(Icons.Default.Sync, contentDescription = strings.syncTitle)
                             }
                         }
                     }
@@ -134,13 +134,13 @@ fun PlaylistsScreen(
     if (showCreateDialog) {
         AlertDialog(
             onDismissRequest = { showCreateDialog = false },
-            title = { Text("Nova llista de reproducció") },
+            title = { Text(strings.newPlaylist) },
             text = {
                 Column {
                     TextField(
                         value = newPlaylistName,
                         onValueChange = { newPlaylistName = it },
-                        label = { Text("Nom") },
+                        label = { Text(strings.nameField) },
                         modifier = Modifier.fillMaxWidth()
                     )
                     Spacer(Modifier.height(16.dp))
@@ -162,7 +162,7 @@ fun PlaylistsScreen(
                     },
                     enabled = newPlaylistName.isNotBlank()
                 ) {
-                    Text("Crea")
+                    Text(strings.create)
                 }
             },
             dismissButton = {

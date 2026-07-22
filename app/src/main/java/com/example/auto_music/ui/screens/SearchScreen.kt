@@ -21,10 +21,12 @@ import coil.compose.AsyncImage
 import com.example.auto_music.model.Playlist
 import com.example.auto_music.model.Song
 import com.example.auto_music.ui.MainViewModel
+import com.example.auto_music.AppTranslations
 
 @Composable
 fun SearchScreen(
     viewModel: MainViewModel, 
+    strings: AppTranslations,
     initialQuery: String = "",
     onPlay: (Song) -> Unit
 ) {
@@ -53,7 +55,7 @@ fun SearchScreen(
                 hasSearched = false // Reset state when typing
             },
             modifier = Modifier.fillMaxWidth(),
-            label = { Text("Busca per títol, artista o lletra") },
+            label = { Text(strings.searchPlaceholder) },
             trailingIcon = {
                 IconButton(onClick = { 
                     if (query.isNotBlank()) {
@@ -62,7 +64,7 @@ fun SearchScreen(
                         keyboardController?.hide()
                     }
                 }) {
-                    Icon(Icons.Default.Search, contentDescription = "Cerca")
+                    Icon(Icons.Default.Search, contentDescription = strings.search)
                 }
             },
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
@@ -84,7 +86,7 @@ fun SearchScreen(
             }
         } else if (hasSearched && searchResults.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("No s'han trobat resultats per a \"$query\"", style = MaterialTheme.typography.bodyLarge)
+                Text("${strings.noResults} \"$query\"", style = MaterialTheme.typography.bodyLarge)
             }
         } else {
             LazyColumn {
@@ -105,7 +107,7 @@ fun SearchScreen(
     if (showPlaylistDialog) {
         AlertDialog(
             onDismissRequest = { showPlaylistDialog = false },
-            title = { Text("Afegir a la llista de reproducció") },
+            title = { Text(strings.addToPlaylist) },
             text = {
                 Column {
                     playlists.forEach { playlist ->
@@ -123,7 +125,7 @@ fun SearchScreen(
             },
             confirmButton = {
                 TextButton(onClick = { showPlaylistDialog = false }) {
-                    Text("Cancel·la")
+                    Text(strings.cancel)
                 }
             }
         )
@@ -148,10 +150,10 @@ fun SongItem(song: Song, onPlay: () -> Unit, onAddToPlaylist: () -> Unit) {
                 Text(song.artist, style = MaterialTheme.typography.bodyMedium)
             }
             IconButton(onClick = onPlay) {
-                Icon(Icons.Default.PlayArrow, contentDescription = "Reprodueix")
+                Icon(Icons.Default.PlayArrow, contentDescription = null)
             }
             IconButton(onClick = onAddToPlaylist) {
-                Icon(Icons.Default.Add, contentDescription = "Afegeix a la llista")
+                Icon(Icons.Default.Add, contentDescription = null)
             }
         }
     }

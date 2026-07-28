@@ -16,6 +16,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 class MusicRepository(
@@ -133,32 +134,134 @@ class MusicRepository(
         
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                Log.i("MusicRepository", "Resolving stream for download: ${song.title}")
-                val stream = com.example.auto_music.player.InnertubeResolver.resolveStream(song.id) ?: run {
-                    Log.e("MusicRepository", "Could not resolve stream for ${song.title}")
-                    return@launch
-                }
-                
-                val fileName = "${song.id}.mp3"; val dir = File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "auto_music")
-                if (!dir.exists()) dir.mkdirs()
-                
-                val file = File(dir, fileName)
-                if (file.exists()) { updateSongDownloadStatus(song.id, file.absolutePath); return@launch }
-                
-                Log.i("MusicRepository", "Starting download: ${song.title} from ${stream.url.take(50)}...")
-                val request = DownloadManager.Request(Uri.parse(stream.url))
-                    .setTitle("Auto Music: ${song.title}")
-                    .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, "auto_music/$fileName")
-                    .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                    .addRequestHeader("User-Agent", stream.userAgent)
-                    .addRequestHeader("Referer", "https://www.youtube.com/")
-
-                val downloadId = (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
-                sp.edit().putString(downloadId.toString(), song.id).putBoolean("pending_${song.id}", true).apply()
-            } catch (e: Exception) { 
-                Log.e("MusicRepository", "Download enqueue error: ${e.message}")
-                sp.edit().remove("pending_${song.id}").apply() 
-            }
+                val stream = com.example.auto_music.player.InnertubeResolver.resolveStream(song.id) ?: return@launch
+                executeDownload(song, stream.url, stream.userAgent)
+            } catch (e: Exception) { sp.edit().remove("pending_${song.id}").apply() }
         }
     }
+
+    private fun executeDownload(song: Song, url: String, userAgent: String) {
+        val sp = context.getSharedPreferences("downloads", Context.MODE_PRIVATE)
+        val fileName = "${song.id}.mp3"
+        val dir = File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "auto_music")
+        if (!dir.exists()) dir.mkdirs()
+        
+        val file = File(dir, fileName)
+        if (file.exists() && file.length() > 0) {
+            CoroutineScope(Dispatchers.IO).launch { updateSongDownloadStatus(song.id, file.absolutePath) }
+            return
+        }
+        
+        val request = DownloadManager.Request(Uri.parse(url))
+            .setTitle("Auto Music: ${song.title}")
+            .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, "auto_music/$fileName")
+            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+            .addRequestHeader("User-Agent", userAgent)
+            .addRequestHeader("Referer", "https://www.youtube.com/")
+
+        val downloadId = (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
+        sp.edit().putString(downloadId.toString(), song.id).putBoolean("pending_${song.id}", true).apply()
+    }
+
+    suspend fun cancelAllDownloads() {
+        val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+        val sp = context.getSharedPreferences("downloads", Context.MODE_PRIVATE)
+        val allKeys = sp.all.keys
+        val idsToCancel = mutableListOf<Long>()
+        
+        allKeys.forEach { key ->
+            key.toLongOrNull()?.let { idsToCancel.add(it) }
+        }
+        
+        if (idsToCancel.isNotEmpty()) {
+            dm.remove(*idsToCancel.toLongArray())
+        }
+        sp.edit().clear().apply()
+        Log.i("MusicRepository", "All downloads cancelled and queue cleared.")
+    }
+
+    suspend fun performLibraryMaintenance(): MaintenanceSummary = withContext(Dispatchers.IO) {
+        Log.i("Maintenance", "Starting Library Maintenance v4.53...")
+        val errors = mutableListOf<MaintenanceError>()
+        var cleanedFiles = 0
+        var totalRequeued = 0
+        var restoredSongs = 0
+        
+        // 1. Clear System Queue
+        cancelAllDownloads()
+        
+        val dir = File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "auto_music")
+        if (!dir.exists()) dir.mkdirs()
+
+        // 2. Identify and Clean Orphaned Files
+        val allSongsInDb = musicDao.getAllSongsList()
+        val validSongIds = allSongsInDb.map { it.id }.toSet()
+        
+        dir.listFiles()?.forEach { file ->
+            if (file.name.endsWith(".mp3")) {
+                val id = file.name.removeSuffix(".mp3")
+                if (id !in validSongIds || file.length() < 1024) { 
+                    file.delete()
+                    cleanedFiles++
+                }
+            }
+        }
+
+        // 3. Scan Playlists and Repair Status
+        val sp = context.getSharedPreferences("AutoMusicPrefs", Context.MODE_PRIVATE)
+        val autoDownloadPublic = sp.getBoolean("auto_download_public", true)
+        val autoDownloadPrivate = sp.getBoolean("auto_download_private", true)
+        
+        val playlists = musicDao.getAllPlaylists().first()
+        val processedSongIds = mutableSetOf<String>()
+
+        for (playlist in playlists) {
+            val shouldDownload = if (playlist.isPublic) autoDownloadPublic else autoDownloadPrivate
+            val songsInPlaylist = musicDao.getSongsInPlaylist(playlist.id).first()
+            
+            for (song in songsInPlaylist) {
+                if (song.id in processedSongIds) continue
+                processedSongIds.add(song.id)
+
+                val file = File(dir, "${song.id}.mp3")
+                if (file.exists() && file.length() > 1024) {
+                    // File is here! Fix DB if needed
+                    if (!song.isDownloaded) {
+                        musicDao.insertSong(song.copy(isDownloaded = true, audioUrl = file.absolutePath))
+                        restoredSongs++
+                    }
+                } else if (shouldDownload) {
+                    // File is missing and we want it!
+                    Log.i("Maintenance", "Missing file for: ${song.title}. Attempting re-queue...")
+                    if (song.isDownloaded) musicDao.insertSong(song.copy(isDownloaded = false, audioUrl = null))
+
+                    try {
+                        val stream = com.example.auto_music.player.InnertubeResolver.resolveStream(song.id)
+                        if (stream != null) {
+                            executeDownload(song, stream.url, stream.userAgent)
+                            totalRequeued++
+                        } else {
+                            errors.add(MaintenanceError(song.title, "YouTube restriction (Bot detected or geo-lock)"))
+                        }
+                    } catch (e: Exception) {
+                        errors.add(MaintenanceError(song.title, e.message ?: "Network error"))
+                    }
+                }
+            }
+        }
+        
+        MaintenanceSummary(cleanedFiles, totalRequeued, restoredSongs, errors)
+    }
 }
+
+data class MaintenanceSummary(
+    val filesCleaned: Int,
+    val songsRequeued: Int,
+    val songsRestored: Int,
+    val errors: List<MaintenanceError>
+)
+
+data class MaintenanceError(
+    val title: String,
+    val reason: String
+)

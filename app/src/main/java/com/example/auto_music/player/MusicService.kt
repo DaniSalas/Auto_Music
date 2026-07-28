@@ -108,8 +108,6 @@ class MusicService : MediaLibraryService() {
                             val dir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
                             val file = File(dir, "auto_music/$songId.mp3")
                             if (file.exists()) serviceScope.launch { repository.updateSongDownloadStatus(songId, file.absolutePath) }
-                        } else if (status == DownloadManager.STATUS_FAILED) {
-                            Log.e("MusicService", "Download failed for $songId with status $status")
                         }
                     }
                     cursor.close()
@@ -121,7 +119,7 @@ class MusicService : MediaLibraryService() {
 
     override fun onCreate() {
         super.onCreate()
-        Log.d("MusicService", "onCreate: v4.46")
+        Log.d("MusicService", "onCreate: v4.55")
         serviceScope.launch { com.example.auto_music.data.remote.Innertube.fetchVisitorData() }
         cache = PlayerCache.getInstance(applicationContext)
         val database = MusicDatabase.getDatabase(applicationContext)
@@ -143,6 +141,8 @@ class MusicService : MediaLibraryService() {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 mediaItem?.let { item ->
                     val mId = item.mediaId
+                    if (mId == "RESUME_ROOT" || mId.startsWith("RESUME_PL")) return@let
+                    
                     val playlistId = if (mId.contains("|")) mId.substringBefore("|").removePrefix("PL").toLongOrNull() else null
                     val songId = if (mId.contains("|")) mId.substringAfter("|") else mId
                     if (playlistId != null) serviceScope.launch { repository.updatePlaylistPlaybackState(playlistId, songId, 0L) }
@@ -152,10 +152,12 @@ class MusicService : MediaLibraryService() {
         
         serviceScope.launch {
             while (isActive) {
-                delay(5000)
+                delay(3000) 
                 if (newPlayer.isPlaying) {
                     val item = newPlayer.currentMediaItem
                     val mId = item?.mediaId ?: ""
+                    if (mId == "RESUME_ROOT" || mId.startsWith("RESUME_PL")) continue
+                    
                     val playlistId = if (mId.contains("|")) mId.substringBefore("|").removePrefix("PL").toLongOrNull() else null
                     val songId = if (mId.contains("|")) mId.substringAfter("|") else mId
                     if (playlistId != null) repository.updatePlaylistPlaybackState(playlistId, songId, newPlayer.currentPosition)
@@ -193,41 +195,67 @@ class MusicService : MediaLibraryService() {
                 val firstItem = mediaItems.firstOrNull() ?: run { future.set(MediaSession.MediaItemsWithStartPosition(mediaItems, startIndex, startPositionMs)); return@launch }
                 val targetMId = firstItem.mediaId
                 
-                val currentPlayer = player
-                var alreadyInTimeline = false
-                val currentItems = mutableListOf<MediaItem>()
-                var existingIndex = -1
-                if (currentPlayer != null) {
-                    for (i in 0 until currentPlayer.mediaItemCount) {
-                        val item = currentPlayer.getMediaItemAt(i)
-                        currentItems.add(item)
-                        if (item.mediaId == targetMId || (item.mediaId.contains("|") && item.mediaId.substringAfter("|") == targetMId)) {
-                            alreadyInTimeline = true
-                            existingIndex = i
-                        }
+                if (targetMId == "RESUME_ROOT" || targetMId.startsWith("RESUME_PL")) {
+                    val playlistId = if (targetMId == "RESUME_ROOT") {
+                        // Find the most recent playlist globally (optional, for now we look at any playlist with state)
+                        repository.allPlaylists.first().find { it.lastPlayedSongId != null }?.id
+                    } else {
+                        targetMId.removePrefix("RESUME_PL").toLongOrNull()
                     }
-                }
 
-                if (alreadyInTimeline && currentItems.size > 1) {
-                    future.set(MediaSession.MediaItemsWithStartPosition(currentItems, existingIndex, startPositionMs))
-                } else {
-                    val playlistId = if (targetMId.contains("|")) targetMId.substringBefore("|").removePrefix("PL").toLongOrNull() 
-                                     else firstItem.mediaMetadata.extras?.getString("playlistId")?.toLongOrNull()
-                    
                     if (playlistId != null) {
+                        val dbPlaylist = repository.getPlaylistById(playlistId)
                         val songs = repository.getSongsInPlaylist(playlistId).first()
                         val expandedItems = songs.map { createMediaItem(it, playlistId) }
-                        val targetSongId = if (targetMId.contains("|")) targetMId.substringAfter("|") else targetMId
-                        val index = expandedItems.indexOfFirst { it.mediaId.substringAfter("|") == targetSongId }.coerceAtLeast(0)
-                        future.set(MediaSession.MediaItemsWithStartPosition(expandedItems, index, startPositionMs))
-                    } else {
-                        val updated = mediaItems.map { 
-                            val songId = if (it.mediaId.contains("|")) it.mediaId.substringAfter("|") else it.mediaId
-                            repository.getSongById(songId)?.let { song -> createMediaItem(song, null) } 
-                                ?: buildSearchMediaItem(it)
+                        
+                        var finalIndex = 0
+                        var finalPos = 0L
+                        if (dbPlaylist?.lastPlayedSongId != null) {
+                            val lastIdx = expandedItems.indexOfFirst { it.mediaId.substringAfter("|") == dbPlaylist.lastPlayedSongId }
+                            if (lastIdx != -1) {
+                                finalIndex = lastIdx
+                                finalPos = dbPlaylist.lastPlayedPositionMs
+                            }
                         }
-                        future.set(MediaSession.MediaItemsWithStartPosition(updated, startIndex, startPositionMs))
+                        future.set(MediaSession.MediaItemsWithStartPosition(expandedItems, finalIndex, finalPos))
+                    } else {
+                        future.set(MediaSession.MediaItemsWithStartPosition(mediaItems, startIndex, startPositionMs))
                     }
+                    return@launch
+                }
+
+                val playlistId = if (targetMId.contains("|")) targetMId.substringBefore("|").removePrefix("PL").toLongOrNull() 
+                                 else firstItem.mediaMetadata.extras?.getString("playlistId")?.toLongOrNull()
+                
+                if (playlistId != null) {
+                    val dbPlaylist = repository.getPlaylistById(playlistId)
+                    val songs = repository.getSongsInPlaylist(playlistId).first()
+                    val expandedItems = songs.map { createMediaItem(it, playlistId) }
+                    
+                    var finalIndex = startIndex
+                    var finalPosition = startPositionMs
+                    
+                    val targetSongId = if (targetMId.contains("|")) targetMId.substringAfter("|") else targetMId
+                    val indexInPlaylist = expandedItems.indexOfFirst { it.mediaId.substringAfter("|") == targetSongId }
+                    
+                    if (indexInPlaylist != -1) {
+                        finalIndex = indexInPlaylist
+                    } else if (dbPlaylist != null && dbPlaylist.lastPlayedSongId != null) {
+                        val lastIdx = expandedItems.indexOfFirst { it.mediaId.substringAfter("|") == dbPlaylist.lastPlayedSongId }
+                        if (lastIdx != -1) {
+                            finalIndex = lastIdx
+                            finalPosition = dbPlaylist.lastPlayedPositionMs
+                        }
+                    }
+                    
+                    future.set(MediaSession.MediaItemsWithStartPosition(expandedItems, finalIndex.coerceAtLeast(0), finalPosition))
+                } else {
+                    val updated = mediaItems.map { 
+                        val songId = if (it.mediaId.contains("|")) it.mediaId.substringAfter("|") else it.mediaId
+                        repository.getSongById(songId)?.let { song -> createMediaItem(song, null) } 
+                            ?: buildSearchMediaItem(it)
+                    }
+                    future.set(MediaSession.MediaItemsWithStartPosition(updated, startIndex, startPositionMs))
                 }
             }
             return future
@@ -252,6 +280,22 @@ class MusicService : MediaLibraryService() {
             return MediaItem.Builder().setMediaId(compositeId).setUri(uri).setMimeType("audio/mpeg").setCustomCacheKey(song.id).setMediaMetadata(metadata).build()
         }
 
+        private fun getResumeString(context: Context): String {
+            val lang = context.getSharedPreferences("AutoMusicPrefs", Context.MODE_PRIVATE).getString("language", "ESPANOL")
+            return when (lang) {
+                "ENGLISH" -> "Resume playback"
+                "CATALA" -> "Continuar reproducció"
+                "GALEGO" -> "Continuar reprodución"
+                "EUSKARA" -> "Erreprodukzioa jarraitu"
+                "FRANCAIS" -> "Reprendre la lecture"
+                "DEUTSCH" -> "Wiedergabe fortsetzen"
+                "ITALIANO" -> "Continua riproduzione"
+                "KOREAN" -> "재생 계속"
+                "JAPANESE" -> "再生を続行"
+                else -> "Continuar reproducción"
+            }
+        }
+
         override fun onGetLibraryRoot(session: MediaLibrarySession, browser: MediaSession.ControllerInfo, params: LibraryParams?): ListenableFuture<LibraryResult<MediaItem>> {
             val rootMetadata = MediaMetadata.Builder().setTitle("Auto Music").setIsBrowsable(true).setIsPlayable(false).setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED).setExtras(Bundle().apply { putInt("android.media.browse.CONTENT_STYLE_BROWSABLE_HINT", 1); putInt("android.media.browse.CONTENT_STYLE_PLAYABLE_HINT", 1) }).build()
             return Futures.immediateFuture(LibraryResult.ofItem(MediaItem.Builder().setMediaId("ROOT").setMediaMetadata(rootMetadata).build(), params))
@@ -263,15 +307,42 @@ class MusicService : MediaLibraryService() {
                 try {
                     if (parentId == "ROOT") {
                         val playlists = repository.allPlaylists.first()
-                        val items = playlists.map { playlist ->
-                            MediaItem.Builder().setMediaId("PLAYLIST_${playlist.id}").setMediaMetadata(MediaMetadata.Builder().setTitle(playlist.name).setIsBrowsable(true).setIsPlayable(false).setMediaType(MediaMetadata.MEDIA_TYPE_PLAYLIST).setExtras(Bundle().apply { putInt("android.media.browse.CONTENT_STYLE_BROWSABLE_HINT", 1) }).build()).build()
+                        val items = mutableListOf<MediaItem>()
+                        
+                        // GLOBAL RESUME ITEM
+                        if (playlists.any { it.lastPlayedSongId != null }) {
+                            items.add(MediaItem.Builder()
+                                .setMediaId("RESUME_ROOT")
+                                .setMediaMetadata(MediaMetadata.Builder()
+                                    .setTitle("▶ " + getResumeString(applicationContext))
+                                    .setIsBrowsable(false).setIsPlayable(true)
+                                    .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC).build())
+                                .build())
                         }
-                        future.set(LibraryResult.ofItemList(items, params))
+
+                        items.addAll(playlists.map { playlist ->
+                            MediaItem.Builder().setMediaId("PLAYLIST_${playlist.id}").setMediaMetadata(MediaMetadata.Builder().setTitle(playlist.name).setIsBrowsable(true).setIsPlayable(false).setMediaType(MediaMetadata.MEDIA_TYPE_PLAYLIST).setExtras(Bundle().apply { putInt("android.media.browse.CONTENT_STYLE_BROWSABLE_HINT", 1) }).build()).build()
+                        })
+                        future.set(LibraryResult.ofItemList(ImmutableList.copyOf(items), params))
                     } else if (parentId.startsWith("PLAYLIST_")) {
                         val playlistId = parentId.removePrefix("PLAYLIST_").toLong()
+                        val dbPlaylist = repository.getPlaylistById(playlistId)
                         val songs = repository.getSongsInPlaylist(playlistId).first()
-                        val items = songs.map { createMediaItem(it, playlistId) }
-                        future.set(LibraryResult.ofItemList(items, params))
+                        val items = mutableListOf<MediaItem>()
+                        
+                        // PLAYLIST SPECIFIC RESUME
+                        if (dbPlaylist?.lastPlayedSongId != null) {
+                            items.add(MediaItem.Builder()
+                                .setMediaId("RESUME_PL$playlistId")
+                                .setMediaMetadata(MediaMetadata.Builder()
+                                    .setTitle("▶ " + getResumeString(applicationContext))
+                                    .setIsBrowsable(false).setIsPlayable(true)
+                                    .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC).build())
+                                .build())
+                        }
+
+                        items.addAll(songs.map { createMediaItem(it, playlistId) })
+                        future.set(LibraryResult.ofItemList(ImmutableList.copyOf(items), params))
                     } else future.set(LibraryResult.ofError(SessionError.ERROR_BAD_VALUE))
                 } catch (e: Exception) { future.set(LibraryResult.ofError(SessionError.ERROR_UNKNOWN)) }
             }

@@ -23,7 +23,9 @@ fun PlaylistsScreen(
     viewModel: MainViewModel, 
     strings: AppTranslations,
     onPlaylistClick: (Playlist) -> Unit,
-    onManualSync: (() -> Unit)? = null
+    onManualSync: (() -> Unit)? = null,
+    onMaintenance: (() -> Unit)? = null,
+    isMaintenanceRunning: Boolean = false
 ) {
     val playlists by viewModel.playlists.collectAsState()
     var showCreateDialog by remember { mutableStateOf(false) }
@@ -61,6 +63,12 @@ fun PlaylistsScreen(
                     } else {
                         IconButton(onClick = { showCreateDialog = true }) {
                             Icon(Icons.Default.Add, contentDescription = strings.newPlaylist)
+                        }
+                        if (onMaintenance != null) {
+                            IconButton(onClick = onMaintenance, enabled = !isMaintenanceRunning) {
+                                if (isMaintenanceRunning) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                                else Icon(Icons.Default.Build, contentDescription = strings.maintenanceTitle)
+                            }
                         }
                         if (onManualSync != null) {
                             IconButton(onClick = onManualSync) {

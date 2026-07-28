@@ -56,6 +56,9 @@ interface MusicDao {
     @Delete
     suspend fun deleteSong(song: Song)
     
+    @Query("SELECT * FROM songs")
+    suspend fun getAllSongsList(): List<Song>
+    
     @Transaction
     suspend fun updateSongOrder(playlistId: Long, songIds: List<String>) {
         songIds.forEachIndexed { index, songId ->

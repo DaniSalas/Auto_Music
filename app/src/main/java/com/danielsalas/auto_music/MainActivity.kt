@@ -8,7 +8,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -23,6 +24,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -103,7 +105,11 @@ class MainActivity : ComponentActivity() {
                     val sessionToken = androidx.media3.session.SessionToken(context, android.content.ComponentName(context, com.danielsalas.auto_music.player.MusicService::class.java))
                     val controllerFuture = androidx.media3.session.MediaController.Builder(context, sessionToken).buildAsync()
                     controllerFuture.addListener({
-                        try { controller = controllerFuture.get() } catch (e: Exception) { android.util.Log.e("MainActivity", "Controller error", e) }
+                        try { 
+                            val c = controllerFuture.get()
+                            controller = c
+                            viewModel.setMediaController(c)
+                        } catch (e: Exception) { android.util.Log.e("MainActivity", "Controller error", e) }
                     }, ContextCompat.getMainExecutor(context))
                 }
 
@@ -168,6 +174,7 @@ fun MainApp(
                 NavigationDrawerItem(label = { Text(strings.playlists) }, selected = currentScreen == 1, onClick = { scope.launch { drawerState.close() }; currentScreen = 1; selectedPlaylist = null }, icon = { Icon(Icons.AutoMirrored.Filled.List, null) })
                 NavigationDrawerItem(label = { Text(strings.language) }, selected = currentScreen == 2, onClick = { scope.launch { drawerState.close() }; currentScreen = 2; selectedPlaylist = null }, icon = { Icon(Icons.Default.Language, null) })
                 NavigationDrawerItem(label = { Text(strings.configTitle) }, selected = currentScreen == 3, onClick = { scope.launch { drawerState.close() }; currentScreen = 3; selectedPlaylist = null }, icon = { Icon(Icons.Default.Settings, null) })
+                NavigationDrawerItem(label = { Text(strings.equalizerTitle) }, selected = currentScreen == 6, onClick = { scope.launch { drawerState.close() }; currentScreen = 6; selectedPlaylist = null }, icon = { Icon(Icons.Default.Tune, null) })
                 NavigationDrawerItem(label = { Text(strings.manualTitle) }, selected = currentScreen == 5, onClick = { scope.launch { drawerState.close() }; currentScreen = 5; selectedPlaylist = null }, icon = { Icon(Icons.Default.Help, null) })
                 NavigationDrawerItem(
                     label = { Text(strings.maintenanceTitle) }, 
@@ -248,6 +255,7 @@ fun MainApp(
                             3 -> ConfigScreen(strings, Color(backgroundColor.toInt()), isDarkTheme, syncId, autoDownloadPublic, autoDownloadPrivate, { syncId = it; sharedPrefs.edit().putString("sync_id", it).apply() }, { autoDownloadPublic = it; sharedPrefs.edit().putBoolean("auto_download_public", it).apply() }, { autoDownloadPrivate = it; sharedPrefs.edit().putBoolean("auto_download_private", it).apply() }, onDarkThemeChange, { backgroundColor = it.toArgb().toLong(); sharedPrefs.edit().putLong("bg_color", backgroundColor).apply() })
                             4 -> DonationScreen(strings)
                             5 -> ManualScreen(strings, currentLanguage)
+                            6 -> EqualizerScreen(strings, controller)
                         }
                     }
                 }
@@ -330,10 +338,17 @@ fun ManualScreen(strings: AppTranslations, lang: String) {
         Spacer(Modifier.height(16.dp))
         
         ManualSection(strings.manWelcomeTitle, strings.manWelcomeDesc)
-        ManualSection(strings.search, strings.manSearchDesc)
-        ManualSection(strings.playlists, strings.manPlaylistsDesc)
-        ManualSection(strings.manSongsTitle, strings.manSongsDesc)
         
+        ManualHeader(strings.search)
+        Text(strings.manSearchDesc, style = MaterialTheme.typography.bodyMedium)
+        IconExplanation(Icons.Default.PlayArrow, strings.manIconPlay)
+        IconExplanation(Icons.Default.Add, strings.manIconAdd)
+        
+        ManualHeader(strings.playlists)
+        Text(strings.manPlaylistsDesc, style = MaterialTheme.typography.bodyMedium)
+        
+        ManualHeader(strings.manSongsTitle)
+        Text(strings.manSongsDesc, style = MaterialTheme.typography.bodyMedium)
         IconExplanation(Icons.Default.DragHandle, strings.manIconDrag)
         IconExplanation(Icons.Default.Shuffle, strings.manIconShuffle)
         IconExplanation(Icons.Default.Difference, strings.manIconDup)
@@ -341,10 +356,181 @@ fun ManualScreen(strings: AppTranslations, lang: String) {
         IconExplanation(Icons.Default.Lock, strings.manIconFix)
         IconExplanation(Icons.Default.List, strings.manIconManual)
         IconExplanation(Icons.Default.Search, strings.manIconSearch)
+        IconExplanation(Icons.Default.VolumeUp, strings.manIconNorm)
         
-        ManualSection(strings.maintenanceTitle, strings.manMaintenanceDesc)
+        ManualHeader(strings.configTitle)
+        ManualSection(strings.darkMode, strings.manConfigDark)
+        ManualSection(strings.autoDownloadTitle, strings.manConfigAuto)
+        ManualSection(strings.syncTitle, strings.manConfigSync)
+        ManualSection(strings.selectColor, strings.manConfigColor)
         
+        ManualHeader(strings.equalizerTitle)
+        Text(strings.manEqDesc, style = MaterialTheme.typography.bodyMedium)
+        
+        ManualHeader(strings.maintenanceTitle)
+        Text(strings.manMaintenanceDesc, style = MaterialTheme.typography.bodyMedium)
+        
+        Spacer(Modifier.height(48.dp))
+    }
+}
+
+@Composable
+fun EqualizerScreen(strings: AppTranslations, controller: androidx.media3.session.MediaController?) {
+    val context = LocalContext.current
+    val sp = remember { context.getSharedPreferences("EqualizerPrefs", Context.MODE_PRIVATE) }
+    var eqEnabled by remember { mutableStateOf(sp.getBoolean("eq_enabled", false)) }
+    
+    val presets = listOf("Flat", "Rock", "Jazz", "Metal", "Classical", "Acoustic")
+    val reverbs = listOf(strings.none, strings.carSpace, strings.mediumRoom, strings.largeHall)
+    
+    val frequencies = listOf("31Hz", "62Hz", "125Hz", "250Hz", "500Hz", "1kHz", "2kHz", "4kHz", "8kHz", "16kHz")
+    val bandLevels = remember { mutableStateListOf<Int>().apply { for (i in 0 until 10) add(sp.getInt("band_$i", 0)) } }
+    
+    var showSavePresetDialog by remember { mutableStateOf(false) }
+    var newPresetName by remember { mutableStateOf("") }
+    val customPresets = remember { mutableStateListOf<String>().apply { addAll(sp.getStringSet("custom_presets", emptySet()) ?: emptySet()) } }
+    var activePreset by remember { mutableStateOf(sp.getString("active_preset", "Flat") ?: "Flat") }
+
+    Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(strings.equalizerTitle, style = MaterialTheme.typography.headlineMedium)
+            Spacer(Modifier.weight(1f))
+            Switch(checked = eqEnabled, onCheckedChange = { 
+                eqEnabled = it
+                sp.edit().putBoolean("eq_enabled", it).apply()
+                updateServiceEq(controller, it, bandLevels.toIntArray(), sp.getInt("reverb_preset", 0))
+            })
+        }
+        
+        Spacer(Modifier.height(24.dp))
+        Text(strings.graphicEq, style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(16.dp))
+        
+        Box(modifier = Modifier.fillMaxWidth().height(350.dp).background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f), RoundedCornerShape(12.dp)).padding(8.dp)) {
+            Row(modifier = Modifier.fillMaxSize(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                for (i in 0 until 10) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f).fillMaxHeight()) {
+                        Text(frequencies[i], fontSize = 9.sp, maxLines = 1)
+                        Box(modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .pointerInput(Unit) {
+                                detectDragGestures { change, dragAmount ->
+                                    change.consume()
+                                    val newValue = (bandLevels[i] - (dragAmount.y / size.height * 1500)).toInt().coerceIn(0, 1500)
+                                    bandLevels[i] = newValue
+                                    sp.edit().putInt("band_$i", newValue).apply()
+                                    activePreset = "Custom"
+                                    sp.edit().putString("active_preset", "Custom").apply()
+                                    updateServiceEq(controller, eqEnabled, bandLevels.toIntArray(), sp.getInt("reverb_preset", 0))
+                                }
+                            }
+                            .pointerInput(Unit) {
+                                detectTapGestures { offset ->
+                                    val newValue = ((1f - (offset.y / size.height)) * 1500).toInt().coerceIn(0, 1500)
+                                    bandLevels[i] = newValue
+                                    sp.edit().putInt("band_$i", newValue).apply()
+                                    activePreset = "Custom"
+                                    sp.edit().putString("active_preset", "Custom").apply()
+                                    updateServiceEq(controller, eqEnabled, bandLevels.toIntArray(), sp.getInt("reverb_preset", 0))
+                                }
+                            }, 
+                            contentAlignment = Alignment.BottomCenter
+                        ) {
+                            Box(modifier = Modifier
+                                .fillMaxWidth(0.6f)
+                                .fillMaxHeight((bandLevels[i].toFloat() / 1500f).coerceAtLeast(0.01f))
+                                .background(
+                                    if (eqEnabled) MaterialTheme.colorScheme.primary 
+                                    else MaterialTheme.colorScheme.outline.copy(alpha = 0.5f), 
+                                    RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp)
+                                )
+                            )
+                        }
+                        Text("${bandLevels[i] / 100}dB", fontSize = 9.sp)
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(24.dp)); Text(strings.presets, style = MaterialTheme.typography.titleMedium)
+        androidx.compose.foundation.layout.FlowRow(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            presets.forEach { p ->
+                FilterChip(selected = activePreset == p, onClick = { 
+                    applyPreset(p, sp); activePreset = p; sp.edit().putString("active_preset", p).apply()
+                    for (i in 0 until 10) bandLevels[i] = sp.getInt("band_$i", 0)
+                    updateServiceEq(controller, eqEnabled, bandLevels.toIntArray(), sp.getInt("reverb_preset", 0))
+                }, label = { Text(p) })
+            }
+            customPresets.forEach { p ->
+                FilterChip(selected = activePreset == p, onClick = { 
+                    applyCustomPreset(p, sp); activePreset = p; sp.edit().putString("active_preset", p).apply()
+                    for (i in 0 until 10) bandLevels[i] = sp.getInt("band_$i", 0)
+                    updateServiceEq(controller, eqEnabled, bandLevels.toIntArray(), sp.getInt("reverb_preset", 0))
+                }, label = { Text(p) }, trailingIcon = {
+                    IconButton(onClick = { 
+                        val set = sp.getStringSet("custom_presets", emptySet())?.toMutableSet() ?: mutableSetOf()
+                        set.remove(p); sp.edit().putStringSet("custom_presets", set).apply(); customPresets.remove(p)
+                        val editor = sp.edit(); for (i in 0 until 10) editor.remove("custom_${p}_band_$i")
+                        editor.apply()
+                    }, modifier = Modifier.size(16.dp)) { Icon(Icons.Default.Close, null) }
+                })
+            }
+        }
+        
+        Button(onClick = { showSavePresetDialog = true }, modifier = Modifier.fillMaxWidth()) { Text(strings.savePreset) }
+        Spacer(Modifier.height(24.dp)); Text(strings.reverb, style = MaterialTheme.typography.titleMedium)
+        var selectedReverb by remember { mutableIntStateOf(sp.getInt("reverb_preset", 0)) }
+        reverbs.forEachIndexed { index, name ->
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable { 
+                selectedReverb = index; sp.edit().putInt("reverb_preset", index).apply()
+                updateServiceEq(controller, eqEnabled, bandLevels.toIntArray(), index) 
+            }.padding(8.dp)) { RadioButton(selected = selectedReverb == index, onClick = null); Spacer(Modifier.width(8.dp)); Text(name) }
+        }
         Spacer(Modifier.height(32.dp))
+    }
+
+    if (showSavePresetDialog) {
+        AlertDialog(onDismissRequest = { showSavePresetDialog = false }, title = { Text(strings.savePreset) }, text = { OutlinedTextField(value = newPresetName, onValueChange = { newPresetName = it }, label = { Text(strings.nameField) }) }, confirmButton = {
+                TextButton(onClick = {
+                    if (newPresetName.isNotBlank()) {
+                        val set = sp.getStringSet("custom_presets", emptySet())?.toMutableSet() ?: mutableSetOf()
+                        set.add(newPresetName); val editor = sp.edit(); editor.putStringSet("custom_presets", set)
+                        for (i in 0 until 10) editor.putInt("custom_${newPresetName}_band_$i", bandLevels[i])
+                        editor.apply(); customPresets.add(newPresetName); activePreset = newPresetName; sp.edit().putString("active_preset", newPresetName).apply(); showSavePresetDialog = false; newPresetName = ""
+                    }
+                }) { Text(strings.create) }
+            }, dismissButton = { TextButton(onClick = { showSavePresetDialog = false }) { Text(strings.cancel) } })
+    }
+}
+
+private fun applyCustomPreset(name: String, sp: android.content.SharedPreferences) {
+    val editor = sp.edit(); for (i in 0 until 10) { val level = sp.getInt("custom_${name}_band_$i", 0); editor.putInt("band_$i", level) }
+    editor.apply()
+}
+
+private fun applyPreset(name: String, sp: android.content.SharedPreferences) {
+    val levels = when(name) {
+        "Rock" -> intArrayOf(400, 300, 0, 0, 100, 300, 400, 500, 500, 500)
+        "Jazz" -> intArrayOf(200, 100, 100, 200, 0, 0, 0, 100, 200, 300)
+        "Metal" -> intArrayOf(300, 200, 100, 0, 0, 0, 100, 200, 400, 500)
+        "Classical" -> intArrayOf(300, 200, 100, 100, 0, 0, 0, 100, 200, 200)
+        "Acoustic" -> intArrayOf(200, 100, 0, 0, 100, 100, 200, 300, 200, 100)
+        else -> intArrayOf(0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    }
+    val editor = sp.edit(); levels.forEachIndexed { i, l -> editor.putInt("band_$i", l) }; editor.apply()
+}
+
+private fun updateServiceEq(controller: androidx.media3.session.MediaController?, enabled: Boolean, levels: IntArray, reverb: Int) {
+    val bundle = Bundle().apply { putBoolean("enabled", enabled); putIntArray("levels", levels); putInt("reverb", reverb) }
+    controller?.sendCustomCommand(androidx.media3.session.SessionCommand("ACTION_UPDATE_EQ", Bundle.EMPTY), bundle)
+}
+
+@Composable
+fun ManualHeader(title: String) {
+    Column(modifier = Modifier.padding(top = 24.dp, bottom = 8.dp)) {
+        Text(title, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
+        HorizontalDivider(modifier = Modifier.padding(top = 4.dp), thickness = 2.dp, color = MaterialTheme.colorScheme.primaryContainer)
     }
 }
 
@@ -358,10 +544,11 @@ fun ManualSection(title: String, content: String) {
 
 @Composable
 fun IconExplanation(icon: androidx.compose.ui.graphics.vector.ImageVector, text: String) {
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
-        Icon(icon, null, modifier = Modifier.size(24.dp), tint = MaterialTheme.colorScheme.primary)
-        Spacer(Modifier.width(12.dp))
-        Text(text, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 6.dp)) {
+        Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = CircleShape, modifier = Modifier.size(36.dp)) {
+            Box(contentAlignment = Alignment.Center) { Icon(icon, null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary) }
+        }
+        Spacer(Modifier.width(12.dp)); Text(text, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
     }
 }
 
@@ -369,12 +556,10 @@ fun IconExplanation(icon: androidx.compose.ui.graphics.vector.ImageVector, text:
 fun LanguageScreen(strings: AppTranslations, currentLanguage: String, onLanguageChange: (String) -> Unit) {
     val languages = listOf("ENGLISH" to "English", "ESPANOL_LATINO" to "Español Latino", "CATALA" to "Català", "GALEGO" to "Galego", "EUSKARA" to "Euskara", "FRANCAIS" to "Français", "DEUTSCH" to "Deutsch", "ITALIANO" to "Italiano", "KOREAN" to "한국어", "JAPANESE" to "日本語")
     Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
-        Text(strings.language, style = MaterialTheme.typography.headlineMedium)
-        Spacer(Modifier.height(16.dp))
-        languages.forEach { (key, label) ->
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable { onLanguageChange(key) }.padding(16.dp)) {
-                RadioButton(selected = currentLanguage == key, onClick = null)
-                Spacer(Modifier.width(16.dp)); Text(label, style = MaterialTheme.typography.bodyLarge)
+        Text(strings.language, style = MaterialTheme.typography.headlineMedium); Spacer(Modifier.height(16.dp))
+        languages.forEach { pair ->
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable { onLanguageChange(pair.first) }.padding(16.dp)) {
+                RadioButton(selected = currentLanguage == pair.first, onClick = null); Spacer(Modifier.width(16.dp)); Text(pair.second, style = MaterialTheme.typography.bodyLarge)
             }
         }
     }
@@ -383,19 +568,16 @@ fun LanguageScreen(strings: AppTranslations, currentLanguage: String, onLanguage
 @Composable
 fun ConfigScreen(strings: AppTranslations, backgroundColor: Color, isDarkTheme: Boolean, syncId: String, autoDownloadPublic: Boolean, autoDownloadPrivate: Boolean, onSyncIdChange: (String) -> Unit, onAutoDownloadPublicChange: (Boolean) -> Unit, onAutoDownloadPrivateChange: (Boolean) -> Unit, onDarkThemeChange: (Boolean) -> Unit, onColorChange: (Color) -> Unit) {
     Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
-        Text(strings.configTitle, style = MaterialTheme.typography.headlineMedium)
-        Spacer(Modifier.height(24.dp))
+        Text(strings.configTitle, style = MaterialTheme.typography.headlineMedium); Spacer(Modifier.height(24.dp))
         Row(verticalAlignment = Alignment.CenterVertically) { Text(strings.darkMode, style = MaterialTheme.typography.titleMedium); Spacer(Modifier.weight(1f)); Switch(checked = isDarkTheme, onCheckedChange = onDarkThemeChange) }
         Spacer(Modifier.height(24.dp)); Text(strings.autoDownloadTitle, style = MaterialTheme.typography.titleMedium)
         Row(verticalAlignment = Alignment.CenterVertically) { Text(strings.autoDownloadPrivate); Spacer(Modifier.weight(1f)); Switch(checked = autoDownloadPrivate, onCheckedChange = onAutoDownloadPrivateChange) }
         Row(verticalAlignment = Alignment.CenterVertically) { Text(strings.autoDownloadPublic); Spacer(Modifier.weight(1f)); Switch(checked = autoDownloadPublic, onCheckedChange = onAutoDownloadPublicChange) }
         Spacer(Modifier.height(24.dp)); Text(strings.syncTitle, style = MaterialTheme.typography.titleMedium)
         Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(value = syncId, onValueChange = onSyncIdChange, label = { Text(strings.syncIdLabel) }, modifier = Modifier.weight(1f), singleLine = true)
-            Spacer(Modifier.width(8.dp)); Button(onClick = { onSyncIdChange((100000..999999).random().toString()) }) { Text(strings.generate) }
+            OutlinedTextField(value = syncId, onValueChange = onSyncIdChange, label = { Text(strings.syncIdLabel) }, modifier = Modifier.weight(1f), singleLine = true); Spacer(Modifier.width(8.dp)); Button(onClick = { onSyncIdChange((100000..999999).random().toString()) }) { Text(strings.generate) }
         }
-        Text(strings.syncHelp, style = MaterialTheme.typography.bodySmall, color = Color.Gray)
-        Spacer(Modifier.height(24.dp)); Text(strings.selectColor, style = MaterialTheme.typography.titleMedium); Spacer(Modifier.height(16.dp))
+        Text(strings.syncHelp, style = MaterialTheme.typography.bodySmall, color = Color.Gray); Spacer(Modifier.height(24.dp)); Text(strings.selectColor, style = MaterialTheme.typography.titleMedium); Spacer(Modifier.height(16.dp))
         var r by remember { mutableFloatStateOf(backgroundColor.red) }; var g by remember { mutableFloatStateOf(backgroundColor.green) }; var b by remember { mutableFloatStateOf(backgroundColor.blue) }; var brightness by remember { mutableFloatStateOf(1f) }
         val updateColor = { red: Float, gr: Float, bl: Float, bri: Float -> onColorChange(Color(red * bri, gr * bri, bl * bri)) }
         Text("R: ${(r * 255).toInt()}", style = MaterialTheme.typography.bodySmall); Slider(value = r, onValueChange = { r = it; updateColor(r, g, b, brightness) }, valueRange = 0f..1f)
@@ -409,8 +591,7 @@ fun ConfigScreen(strings: AppTranslations, backgroundColor: Color, isDarkTheme: 
 @Composable
 fun DonationScreen(strings: AppTranslations) {
     Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(strings.donationTitle, style = MaterialTheme.typography.headlineMedium)
-        Spacer(Modifier.height(32.dp)); Icon(Icons.Default.Favorite, null, modifier = Modifier.size(100.dp), tint = Color.Red); Spacer(Modifier.height(32.dp)); Text(strings.donationText, style = MaterialTheme.typography.bodyLarge, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+        Text(strings.donationTitle, style = MaterialTheme.typography.headlineMedium); Spacer(Modifier.height(32.dp)); Icon(Icons.Default.Favorite, null, modifier = Modifier.size(100.dp), tint = Color.Red); Spacer(Modifier.height(32.dp)); Text(strings.donationText, style = MaterialTheme.typography.bodyLarge, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
         Spacer(Modifier.height(24.dp)); Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer), modifier = Modifier.fillMaxWidth()) { Text("BIZZUM: +34 655 53 33 04", modifier = Modifier.padding(16.dp).fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.Center, style = MaterialTheme.typography.headlineSmall, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold) }
     }
 }
@@ -432,12 +613,7 @@ fun MiniPlayer(
     var duration by remember { mutableLongStateOf(controller.duration) }
     DisposableEffect(controller) {
         val listener = object : androidx.media3.common.Player.Listener {
-            override fun onMediaMetadataChanged(mediaMetadata: androidx.media3.common.MediaMetadata) { 
-                title = mediaMetadata.title?.toString() ?: ""
-                artist = mediaMetadata.artist?.toString() ?: ""
-                artworkUri = mediaMetadata.artworkUri
-                album = mediaMetadata.extras?.getString("album") ?: ""
-            }
+            override fun onMediaMetadataChanged(mediaMetadata: androidx.media3.common.MediaMetadata) { title = mediaMetadata.title?.toString() ?: ""; artist = mediaMetadata.artist?.toString() ?: ""; artworkUri = mediaMetadata.artworkUri; album = mediaMetadata.extras?.getString("album") ?: "" }
             override fun onIsPlayingChanged(playing: Boolean) { isPlaying = playing }
             override fun onPlaybackStateChanged(state: Int) { playbackState = state }
         }
@@ -451,12 +627,7 @@ fun MiniPlayer(
             Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = if (isExpanded) 16.dp else 4.dp)) {
                 if (isExpanded) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                        AsyncImage(
-                            model = artworkUri, 
-                            contentDescription = null, 
-                            modifier = Modifier.size(200.dp).background(Color.LightGray, RoundedCornerShape(12.dp)).clickable { onAlbumClick(if (album.isNotBlank()) album else artist) }, 
-                            contentScale = ContentScale.Crop
-                        )
+                        AsyncImage(model = artworkUri, contentDescription = null, modifier = Modifier.size(200.dp).background(Color.LightGray, RoundedCornerShape(12.dp)).clickable { onAlbumClick(if (album.isNotBlank()) album else artist) }, contentScale = ContentScale.Crop)
                         Spacer(Modifier.height(16.dp)); Text(text = title, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis); Text(text = artist, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.secondary)
                         Spacer(Modifier.height(16.dp)); Slider(value = if (duration > 0) position.toFloat() else 0f, onValueChange = { controller.seekTo(it.toLong()) }, valueRange = 0f..(if (duration > 0) duration.toFloat() else 1f), modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp))
                         Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp), horizontalArrangement = Arrangement.SpaceBetween) { Text(text = formatTime(position), fontSize = 12.sp); Text(text = formatTime(duration), fontSize = 12.sp) }
@@ -470,12 +641,7 @@ fun MiniPlayer(
                     }
                 } else {
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                        AsyncImage(
-                            model = artworkUri, 
-                            contentDescription = null, 
-                            modifier = Modifier.size(48.dp).padding(end = 12.dp).clickable { onAlbumClick(if (album.isNotBlank()) album else artist) },
-                            contentScale = ContentScale.Crop
-                        )
+                        AsyncImage(model = artworkUri, contentDescription = null, modifier = Modifier.size(48.dp).padding(end = 12.dp).clickable { onAlbumClick(if (album.isNotBlank()) album else artist) }, contentScale = ContentScale.Crop)
                         Column(modifier = Modifier.weight(1f)) { Text(text = title, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis); Text(text = artist, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                         IconButton(onClick = { controller.seekToPreviousMediaItem() }) { Icon(Icons.Default.SkipPrevious, null) }
                         IconButton(onClick = { if (isPlaying) controller.pause() else controller.play() }) { Icon(imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, null) }
@@ -488,20 +654,328 @@ fun MiniPlayer(
     }
 }
 
-data class AppTranslations(val search: String, val playlists: String, val language: String, val configTitle: String, val donationTitle: String, val donationText: String, val selectColor: String, val close: String, val brightness: String, val preview: String, val darkMode: String, val darkThemeNote: String, val syncTitle: String, val syncIdLabel: String, val syncHelp: String, val generate: String, val deletePlaylist: String, val syncSuccess: String, val syncError: String, val autoDownloadTitle: String, val autoDownloadPrivate: String, val autoDownloadPublic: String, val isPublic: String, val isPrivate: String, val createPublic: String, val createPrivate: String, val selectedItems: String, val searchPlaceholder: String, val noResults: String, val addToPlaylist: String, val cancel: String, val downloaded: String, val downloading: String, val online: String, val syncing: String, val setupId: String, val newPlaylist: String, val nameField: String, val create: String, val maintenanceTitle: String, val maintenanceRunning: String, val maintenanceSummaryTitle: String, val filesCleanedLabel: String, val songsRequeuedLabel: String, val songsRestoredLabel: String, val maintenanceErrorsTitle: String, val resumePlayback: String, val resumePlaylist: String, val sortAZ: String, val sortZA: String, val searchInList: String, val fixOrder: String, val manualOrder: String, val findDuplicates: String, val songsCountLabel: String, val moveToPosition: String, val manualTitle: String, val manWelcomeTitle: String, val manWelcomeDesc: String, val manSearchDesc: String, val manPlaylistsDesc: String, val manSongsTitle: String, val manSongsDesc: String, val manIconDrag: String, val manIconShuffle: String, val manIconDup: String, val manIconAZ: String, val manIconFix: String, val manIconManual: String, val manIconSearch: String, val manMaintenanceDesc: String)
+data class AppTranslations(
+    val search: String, val playlists: String, val language: String, val configTitle: String, val donationTitle: String, 
+    val donationText: String, val selectColor: String, val close: String, val brightness: String, val preview: String, 
+    val darkMode: String, val darkThemeNote: String, val syncTitle: String, val syncIdLabel: String, val syncHelp: String, 
+    val generate: String, val deletePlaylist: String, val syncSuccess: String, val syncError: String, val autoDownloadTitle: String, 
+    val autoDownloadPrivate: String, val autoDownloadPublic: String, val isPublic: String, val isPrivate: String, 
+    val createPublic: String, val createPrivate: String, val selectedItems: String, val searchPlaceholder: String, 
+    val noResults: String, val addToPlaylist: String, val cancel: String, val downloaded: String, val downloading: String, 
+    val online: String, val syncing: String, val setupId: String, val newPlaylist: String, val nameField: String, 
+    val create: String, val maintenanceTitle: String, val maintenanceRunning: String, val maintenanceSummaryTitle: String, 
+    val filesCleanedLabel: String, val songsRequeuedLabel: String, val songsRestoredLabel: String, val maintenanceErrorsTitle: String, 
+    val resumePlayback: String, val resumePlaylist: String, val sortAZ: String, val sortZA: String, val searchInList: String, 
+    val fixOrder: String, val manualOrder: String, val findDuplicates: String, val songsCountLabel: String, 
+    val moveToPosition: String, val manualTitle: String, val manWelcomeTitle: String, val manWelcomeDesc: String, 
+    val manSearchDesc: String, val manPlaylistsDesc: String, val manSongsTitle: String, val manSongsDesc: String, 
+    val manIconDrag: String, val manIconShuffle: String, val manIconDup: String, val manIconAZ: String, 
+    val manIconFix: String, val manIconManual: String, val manIconSearch: String, val manMaintenanceDesc: String, 
+    val manIconPlay: String, val manIconAdd: String, val manConfigDark: String, val manConfigAuto: String, 
+    val manConfigSync: String, val manConfigColor: String, val manIconNorm: String, val volumeNormalization: String,
+    val equalizerTitle: String, val presets: String, val reverb: String, val manEqDesc: String, val graphicEq: String,
+    val none: String, val carSpace: String, val mediumRoom: String, val largeHall: String, val savePreset: String
+)
 
 fun getTranslations(lang: String): AppTranslations {
+    val english = AppTranslations(
+        search = "Search", playlists = "Playlists", language = "Language", configTitle = "Configuration", donationTitle = "Donation",
+        donationText = "If you liked my application you can donate the amount you consider.", selectColor = "Select background color", close = "Close",
+        brightness = "Brightness", preview = "Preview", darkMode = "Dark Mode", darkThemeNote = "Custom color is disabled in Dark Mode",
+        syncTitle = "Cloud Synchronization", syncIdLabel = "Sync ID", syncHelp = "Use the same ID on all devices to share your playlists.", generate = "Generate",
+        deletePlaylist = "Delete Playlist", syncSuccess = "Synchronization successful", syncError = "Synchronization error",
+        autoDownloadTitle = "Automatic Downloads", autoDownloadPrivate = "Private Playlists", autoDownloadPublic = "Public Playlists",
+        isPublic = "Public", isPrivate = "Private", createPublic = "Create Public", createPrivate = "Create Private",
+        selectedItems = "selected", searchPlaceholder = "Search by title, artist or lyrics", noResults = "No results found for",
+        addToPlaylist = "Add to playlist", cancel = "Cancel", downloaded = "✓ Downloaded", downloading = "⏳ Downloading...",
+        online = "🌐 Online", syncing = "Syncing...", setupId = "Set up ID", newPlaylist = "New playlist", nameField = "Name", create = "Create",
+        maintenanceTitle = "Library Maintenance", maintenanceRunning = "Cleaning and verifying files...",
+        maintenanceSummaryTitle = "Maintenance Summary", filesCleanedLabel = "Files cleaned", songsRequeuedLabel = "Songs requeued",
+        songsRestoredLabel = "Songs restored", maintenanceErrorsTitle = "Unresolved errors",
+        resumePlayback = "▶ Resume last playback", resumePlaylist = "▶ Resume this playlist", sortAZ = "Sort A-Z", sortZA = "Sort Z-A",
+        searchInList = "Search in list", fixOrder = "Fix this order", manualOrder = "Custom order", findDuplicates = "Find duplicates",
+        songsCountLabel = "songs", moveToPosition = "Move to position", manualTitle = "User Manual", manWelcomeTitle = "Welcome",
+        manWelcomeDesc = "Auto Music is a hybrid player designed for the car. It combines online music and local downloads so the music never stops.",
+        manSearchDesc = "Search for songs by title or artist.", 
+        manPlaylistsDesc = "Manage your collections. Public lists are shared with any user, while Private ones are only shared between devices with the same ID.",
+        manSongsTitle = "Songs Screen", manSongsDesc = "Professional management of your tracks inside a list.", 
+        manIconDrag = "Long press and drag to reorder. It auto-scrolls at the edges.",
+        manIconShuffle = "Shuffle: The system remembers this preference per list.",
+        manIconDup = "Duplicates: Filters the list to show only repeated tracks.",
+        manIconAZ = "A-Z: Visual sort to help searching (temporary).",
+        manIconFix = "Fix: Saves the current visual order permanently.",
+        manIconManual = "Manual: Returns to your custom favorite order.",
+        manIconSearch = "Search: Jump directly to a track without stopping audio.",
+        manMaintenanceDesc = "Maintenance: Cleans and ensures offline availability.",
+        manIconPlay = "Play: Starts online or local playback immediately.",
+        manIconAdd = "Add (+): Use this icon to add the song to one of your lists.",
+        manConfigDark = "Dark Mode: Toggle between light and dark themes.",
+        manConfigAuto = "Auto-Download: Automatically download new songs in lists.",
+        manConfigSync = "Cloud Sync: Enter your ID to sync your lists across devices.",
+        manConfigColor = "Background Color: Personalize the app's look in light mode.",
+        manIconNorm = "Normalization: Button to equalize the volume of all songs in a list for safe driving.",
+        volumeNormalization = "Volume Normalization",
+        equalizerTitle = "Equalizer", presets = "Presets", reverb = "Reverb",
+        manEqDesc = "10-band professional EQ with musical presets and 3D reverb spaces for car.",
+        graphicEq = "Graphic Equalizer", none = "None", carSpace = "Car Space", mediumRoom = "Medium Room", 
+        largeHall = "Large Hall", savePreset = "Save Preset"
+    )
+
     return when (lang) {
-        "ENGLISH" -> AppTranslations("Search", "Playlists", "Language", "Configuration", "Donation", "If you liked my application you can donate the amount you consider.", "Select background color", "Close", "Brightness", "Preview", "Dark Mode", "Custom color is disabled in Dark Mode", "Cloud Synchronization", "Sync ID", "Use the same ID on all devices to share your playlists.", "Generate", "Delete Playlist", "Synchronization successful", "Synchronization error", "Automatic Downloads", "Private Playlists", "Public Playlists", "Public", "Private", "Create Public", "Create Private", "selected", "Search by title, artist or lyrics", "No results found for", "Add to playlist", "Cancel", "✓ Downloaded", "⏳ Downloading...", "🌐 Online", "Syncing...", "Set up ID", "New playlist", "Name", "Create", "Library Maintenance", "Cleaning and verifying files...", "Maintenance Summary", "Files cleaned", "Songs requeued", "Songs restored", "Unresolved errors", "▶ Resume last playback", "▶ Resume this playlist", "Sort A-Z", "Sort Z-A", "Search in list", "Fix this order", "Custom order", "Find duplicates", "songs", "Move to position", "User Manual", "Welcome", "Auto Music is a hybrid player designed for the car. It combines online music and local downloads so the music never stops.", "Search for songs by title or artist. Tap one to listen or long press to add it to a list.", "Here you see your collections. You can create Public lists (synced with your cloud ID) or Private ones (this device only).", "Songs Screen", "Inside a list you can manage your music with professional precision.", "Long press and drag to change the order. If you reach the edge, the list will scroll itself.", "Shuffle Mode. The system will remember your preference for each list, even in Android Auto.", "Duplicate Detector. Filters the list to show only songs repeated by title and artist.", "Alphabetical Sort (A-Z). It's only visual to help you search, it doesn't change your favorite order.", "Fix Order. Permanently saves the current alphabetical order as your official order.", "Manual Order. Returns to your favorite order after sorting alphabetically.", "Internal Search. Type to jump directly to a song without stopping the music.", "Cleans orphaned files, repairs the database and ensures all your songs are ready for offline mode.")
-        "CATALA" -> AppTranslations("Cerca", "Llistes", "Idioma", "Configuració", "Donació", "Si t'ha agradat la meva aplicació pots fer una donació amb l'import que consideris.", "Selecciona el color de fons", "Tancar", "Brillantor", "Vista prèvia", "Mode fosc", "El color personalitzat es desactiva en mode fosc", "Sincronització al Núvol", "ID de Sincronització", "Utilitza el mateix ID en tots els dispositius per compartir les teves llistes.", "Generar", "Eliminar llista", "Sincronització correcta", "Error en la sincronització", "Descàrregues Automàtiques", "Llistes Privades", "Llistes Públiques", "Pública", "Privada", "Crea Pública", "Crea Privada", "seleccionades", "Busca per títol, artista o lletra", "No s'han trobat resultats per a", "Afegir a la llista de reproducció", "Cancel·la", "✓ Descarregada", "⏳ Descarregant...", "🌐 Online", "Sincronitzant...", "Configura l'ID", "Nova llista de reproducció", "Nom", "Crea", "Manteniment de la llibreria", "Netejant i verificant fitxers...", "Resum del Manteniment", "Fitxers netejats", "Cançons reencuades", "Cançons restaurades", "Errors sense resoldre", "▶ Continuar última reproducció", "▶ Continuar aquesta llista", "Ordena A-Z", "Ordena Z-A", "Cerca a la llista", "Fixa aquest ordre", "Ordre personalitzat", "Busca duplicats", "cançons", "Moure a posició", "Manual d'Instruccions", "Benvingut", "Auto Music és un reproductor híbrid dissenyat pel cotxe. Combina música online i descàrregues locals perquè mai s'aturi la música.", "Busca cançons per títol o artista. Toca una per escoltar-la o mantén premut per afegir-la a una llista.", "Aquí veus les teves col·leccions. Pots crear llistes Públiques (es sincronitzen amb el teu ID al núvol) o Privades (només en aquest dispositiu).", "Pantalla de Cançons", "Dins d'una llista pots gestionar la teva música amb precisió professional.", "Mantén premut i arrossega per canviar l'ordre. Si arribes al límit, la llista es desplaçarà sola.", "Mode Aleatori. El sistema recordarà la teva preferència per cada llista, fins i tot a Android Auto.", "Detector de Duplicats. Filtra la llista per mostrar només les cançons repetides per títol i artista.", "Ordre Alfabètic (A-Z). És només visual per ajudar-te a buscar, no canvia el teu ordre preferit.", "Fixar Ordre. Desa permanentment l'ordre alfabètic actual com el teu ordre oficial.", "Ordre Manual. Torna al teu ordre preferit després d'haver ordenat alfabèticament.", "Cercador Intern. Escriu per saltar directament a una cançó sense aturar la música.", "Neteja fitxers orfes, repara la base de dades i assegura que totes les cançons estiguin a punt pel mode offline.")
-        "GALEGO" -> AppTranslations("Cerca", "Listas", "Lingua", "Configuración", "Doazón", "Se che gustou a miña aplicació podes doar o importe que consideres.", "Selecciona a cor de fondo", "Pechar", "Brillo", "Vista previa", "Modo escuro", "A cor personalizada desactívase no modo escuro", "Sincronización na Nube", "ID de Sincronización", "Usa o mesmo ID en todos os teus dispositivos.", "Xerar", "Eliminar lista", "Sincronización correcta", "Error na sincronización", "Descargas Automáticas", "Listas Privadas", "Listas Públicas", "Pública", "Privada", "Crear Pública", "Crear Privada", "seleccionadas", "Busca por título, artista ou letra", "Non se atoparon resultados para", "Engadir á lista de reprodución", "Cancelar", "✓ Descargada", "⏳ Descargando...", "🌐 En liña", "Sincronizando...", "Configura o ID", "Nova lista de reprodución", "Nome", "Crear", "Mantemento da librería", "Limpando e verificando ficheiros...", "Resumo do Mantemento", "Ficheiros limpados", "Cancións reencoladas", "Cancións restauradas", "Erros sen resolver", "▶ Continuar última reprodución", "▶ Continuar esta lista", "Ordenar A-Z", "Ordenar Z-A", "Buscar na lista", "Fixar esta orde", "Orde personalizada", "Buscar duplicados", "cancións", "Mover a posición", "Manual de Instrucións", "Benvido", "Auto Music é un reprodutor híbrido deseñado para o coche. Combina música online e descargas locais.", "Busca cancións por título ou artista. Toca unha para escoitala ou mantén premido para engadila.", "Aquí ves as túas coleccións. Podes crear listas Públicas (sincronizadas) ou Privadas.", "Pantalla de Cancións", "Dentro dunha lista podes xestionar a túa música con precisión profesional.", "Mantén premido e arrastra para cambiar a orde. A lista desprazarase sola ao chegar ao bordo.", "Modo Aleatorio. O sistema lembrará a túa preferencia para cada lista.", "Detector de Duplicados. Filtra a lista para amosar só cancións repetidas.", "Orde Alfabética (A-Z). É visual para axudar a buscar, non cambia a túa orde favorita.", "Fixar Orde. Garda permanentemente a orde alfabética actual como oficial.", "Orde Manual. Volve á túa orde favorita despois de ordenar alfabeticamente.", "Buscador Interno. Escribe para saltar directamente a unha canción.", "Limpa ficheiros orfos e asegura que as cancións estean listas para o modo offline.")
-        "EUSKARA" -> AppTranslations("Bilatu", "Zerrendak", "Hizkuntza", "Konfigurazioa", "Dohaintza", "Nire aplikazioa gustatu bazaizu, nahi duzun zenbatekoa eman dezakezu.", "Hautatu atzeko planoko kolorea", "Itxi", "Distira", "Aurreikuspena", "Modu iluna", "Kolore pertsonalizatua desgaituta dago modu ilunean", "Hodeiko Sinkronizazioa", "Sinkronizazio IDa", "Erabili ID bera gailu guztietan.", "Sortu", "Zerrenda ezabatu", "Sinkronizazio arrakastatsua", "Errorea sinkronizatzean", "Deskarga Automatikoak", "Zerrenda Pribatuak", "Zerrenda Publikoak", "Publikoa", "Pribatua", "Publikoa Sortu", "Pribatua Sortu", "hautatuta", "Bilatu izenburuaren, artistaren edo letren arabera", "Ez da emaitzarik aurkitu honetarako:", "Gehitu erreprodukzio-zerrendara", "Utzi", "✓ Deskargatuta", "⏳ Deskargatzen...", "🌐 Online", "Sinkronizatzen...", "Konfiguratu IDa", "Erreprodukzio-zerrenda berria", "Izena", "Sortu", "Liburutegiaren mantentzea", "Fitxategiak garbitzen eta egiaztatzen...", "Mantentze-lanen laburpena", "Garbitutako fitxategiak", "Berriro ilaran jarritako abestiak", "Leheneratutako abestiak", "Ebatzi gabeko erroreak", "▶ Erreprodukzioa jarraitu", "▶ Erreprodukzio-zerrenda jarraitu", "Ordenatu A-Z", "Ordenatu Z-A", "Zerrendan bilatu", "Finkatu ordena hau", "Ordena pertsonalizatua", "Bilatu bikoiztuak", "abestiak", "Mugitu posiziora", "Argibide Eskuliburua", "Ongi etorri", "Auto Music autorako diseinatutako erreproduzitzaile hibridoa da.", "Bilatu abestiak izenburuaren edo artistaren arabera.", "Hemen zure bildumak ikusten dituzu. Zerrenda publikoak edo pribatuak sor ditzakezu.", "Abestien Pantaila", "Zerrenda baten barruan zure musika zehaztasun profesionalarekin kudea dezakezu.", "Eduki sakatuta eta arrastatu ordena aldatzeko.", "Ausazko Modua. Sistemak zerrenda bakoitzeko zure lehentasuna gogoratuko du.", "Bikoiztuen Detektatzailea. Zerrenda iragazten du errepikatutako abestiak soilik erakusteko.", "A-Z Ordena. Bilatzen laguntzeko bisuala soilik da, ez du zure ordena gogokoena aldatzen.", "Finkatu Ordena. Uneko ordena alfabetikoa zure ordena ofizial gisa gordetzen du betiko.", "Eskuzko Ordena. Zure ordena gogokoenera itzultzen da alfabetikoki ordenatu ondoren.", "Barne Bilatzailea. Idatzi abesti batera zuzenean joateko.", "Fitxategi umezurtzak garbitzen ditu eta abesti guztiak offline modurako prest daudela ziurtatzen du.")
-        "FRANCAIS" -> AppTranslations("Recherche", "Listes", "Langue", "Configuration", "Don", "Si vous avez aimé mon application, vous pouvez donner le montant que vous considérez.", "Sélectionnez la couleur de fondo", "Fermer", "Luminosité", "Aperçu", "Mode sombre", "La couleur personalizada est désactivée en mode sombre", "Synchronisation Cloud", "ID de Synchro", "Utilisez le même ID sur tous vos appareils.", "Générer", "Supprimer la liste", "Synchronisation réussie", "Erreur de synchronización", "Téléchargements Automatiques", "Listes Privées", "Listes Publiques", "Publique", "Privée", "Créer Publique", "Créer Privée", "sélectionnées", "Recherche par titre, artiste ou paroles", "Aucun résultat trouvé pour", "Ajouter à la playlist", "Annuler", "✓ Téléchargé", "⏳ Téléchargement...", "🌐 En ligne", "Synchronisation...", "Configurer l'ID", "Nouvelle playlist", "Nom", "Créer", "Maintenance de la bibliothèque", "Nettoyage et vérification des fichiers...", "Résumé de la maintenance", "Fichiers nettoyés", "Chansons réenfilées", "Chansons restaurées", "Erreurs non résolues", "▶ Reprendre la lecture", "▶ Reprendre cette playlist", "Trier A-Z", "Trier Z-A", "Rechercher dans la liste", "Fixer cet ordre", "Ordre personnalisé", "Trouver les doublons", "chansons", "Déplacer à la position", "Manuel d'Instructions", "Bienvenue", "Auto Music est un lecteur hybride conçu pour la voiture.", "Recherchez des chansons par titre ou artiste.", "Ici vous voyez vos collections. Vous pouvez créer des listes publiques ou privées.", "Écran des Chansons", "Dans une liste, vous pouvez gérer votre musique avec une précision professionnelle.", "Maintenez et faites glisser pour changer l'ordre.", "Mode Aléatoire. Le système se souviendra de votre préférence pour chaque liste.", "Détecteur de Doublons. Filtre la liste pour n'afficher que les chansons répétées.", "Tri Alphabétique (A-Z). C'est seulement visuel, cela ne change pas votre ordre favori.", "Fixer l'Ordre. Enregistre définitivement l'ordre actuel comme officiel.", "Ordre Manuel. Revient à votre ordre favori après un tri alphabétique.", "Recherche Interne. Tapez pour sauter directement à une chanson.", "Nettoie les fichiers orphelins et assure le mode hors ligne.")
-        "DEUTSCH" -> AppTranslations("Suche", "Listen", "Sprache", "Konfiguration", "Spende", "Wenn Ihnen meine App gefallen hat, können Sie den von Ihnen gewünschten Betrag spenden.", "Hintergrundfarbe auswählen", "Schließen", "Helligkeit", "Vorschau", "Dunkelmodus", "Benutzerdefinierte Farbe ist im Dunkelmodus desactiviert", "Cloud-Synchronisation", "Sync-ID", "Verwenden Sie dieselbe ID auf allen Geräten.", "Generieren", "Wiedergabeliste löschen", "Synchronisierung erfolgreich", "Synchronisierungsfehler", "Automatische Downloads", "Private Playlists", "Öffentliche Playlists", "Öffentlich", "Privat", "Öffentlich Erstellen", "Privat Erstellen", "ausgewählt", "Suche nach Titel, Künstler oder Songtext", "Keine Ergebnisse gefunden für", "Zur Playlist hinzufügen", "Abbrechen", "✓ Heruntergeladen", "⏳ Herunterladen...", "🌐 Online", "Synchronisierung...", "ID einrichten", "Neue Playlist", "Name", "Erstellen", "Bibliothekswartung", "Dateien werden bereigt und überprüft...", "Wartungszusammenfassung", "Gereinigte Dateien", "Wieder in die Warteschlange gestellte Songs", "Wiederhergestellte Songs", "Ungelöste Fehler", "▶ Wiedergabe fortsetzen", "▶ Playlist fortsetzen", "Sortieren A-Z", "Sortieren Z-A", "In der Liste suchen", "Diese Reihenfolge fixieren", "Eigene Reihenfolge", "Duplikate finden", "Lieder", "An Position verschieben", "Bedienungsanleitung", "Willkommen", "Auto Music ist ein Hybrid-Player für das Auto.", "Suchen Sie Songs nach Titel oder Künstler.", "Hier sehen Sie Ihre Sammlungen. Öffentliche oder private Listen.", "Lied-Bildschirm", "In einer Liste können Sie Ihre Musik professionell verwalten.", "Gedrückt halten und ziehen, um die Reihenfolge zu ändern.", "Zufallsmodus. Das System merkt sich Ihre Vorliebe für jede Liste.", "Duplikat-Finder. Filtert die Liste nach doppelten Songs.", "Alphabetische Sortierung (A-Z). Nur visuell, ändert nicht Ihre Lieblingsreihenfolge.", "Ordnung fixieren. Speichert die aktuelle Reihenfolge als offiziell.", "Manuelle Ordnung. Kehrt nach der Sortierung zur Lieblingsreihenfolge zurück.", "Interne Suche. Tippen Sie, um direkt zu einem Song zu springen.", "Bereinigt verwaiste Dateien und stellt den Offline-Modus sicher.")
-        "ITALIANO" -> AppTranslations("Cerca", "Liste", "Lingua", "Configurazione", "Donazione", "Se ti è piaciuta la mia app, puedes donare l'importo que consideri.", "Seleziona el colore dello sfondo", "Chiudi", "Luminosità", "Anteprima", "Modalità scura", "Il colore personalizado è disabilitato in modalidad scura", "Sincronizzazione Cloud", "ID Sincronizzazione", "Usa lo stesso ID su tutti i dispositivos.", "Genera", "Elimina playlist", "Sincronizzazione riuscita", "Errore di sincronizzazione", "Download Automatici", "Playlist Private", "Playlist Pubbliche", "Pubblica", "Privata", "Crea Pubblica", "Crea Privata", "selezionate", "Cerca per titolo, artista o testo", "Nessun resultado trovato per", "Aggiungi alla playlist", "Annulla", "✓ Scaricato", "⏳ Download in corso...", "🌐 Online", "Sincronizzazione...", "Imposta ID", "Nuova playlist", "Nome", "Crea", "Manutenzione libreria", "Pulizia e verifica dei file...", "Riepilogo manutenzione", "File puliti", "Canzoni rimesse in coda", "Canzoni ripristinate", "Errori non risolti", "▶ Continua riproduzione", "▶ Continua questa playlist", "Ordina A-Z", "Ordina Z-A", "Cerca nella lista", "Fissa questo ordine", "Ordine personalizzato", "Trova duplicati", "canzoni", "Sposta in posizione", "Manuale d'Istruzioni", "Benvenuto", "Auto Music è un lettore ibrido progettato per l'auto.", "Cerca canzoni per titolo o artista.", "Qui vedi le tue collezioni. Liste pubbliche o private.", "Schermata Canzoni", "In una lista puoi gestire la tua musica con precisione professionale.", "Tieni premuto e trascina per cambiare l'ordine.", "Modalità Casuale. Il sistema ricorderà la tua preferenza per ogni lista.", "Rilevatore Duplicati. Filtra la lista per mostrare solo i brani ripetuti.", "Ordine Alfabetico (A-Z). Solo visivo, non cambia il tuo ordine preferito.", "Fissa Ordine. Salva permanentemente l'ordine attuale come ufficiale.", "Ordine Manuale. Torna all'ordine preferito dopo il tri alfabetico.", "Ricerca Interna. Digita per saltare direttamente a un brano.", "Pulisce i file orfani e assicura la modalità offline.")
-        "KOREAN" -> AppTranslations("검색", "재생 목록", "언어", "설정", "기부", "내 애플리케이션이 마음에 들면 원하는 금액을 기부할 수 있습니다.", "배경색 선택", "닫기", "밝기", "미리보기", "다크 모드", "다크 모드에서는 사용자 정의 색상이 bi활성화됩니다.", "클라우드 동기화", "동기화 ID", "모든 장치에서 동일한 ID를 사용하여 재생 목록을 공유하십시오.", "생성", "재생 목록 삭제", "동기화 성공", "동기화 오류", "자동 다운로드", "개인 재생 목록", "공개 재생 목록", "공개", "비공개", "공개 생성", "비공개 생성", "선택됨", "제목, 아티스트 또는 가사로 검색", "에 대한 결과를 찾을 수 없습니다", "재생 목록에 추가", "취소", "✓ 다운로드됨", "⏳ 다운로드 중...", "🌐 온라인", "동기화 중...", "ID 설정", "새 재생 목록", "이름", "생성", "라이브러리 유지 관리", "파일 정리 및 확인 중...", "유지 관리 요약", "정리된 파일", "재대기된 노래", "복구된 노래", "해결되지 않은 오류", "▶ 재생 계속", "▶ 이 목록 계속", "A-Z 정렬", "Z-A 정렬", "목록에서 검색", "이 순서 고정", "사용자 지정 순서", "중복 찾기", "곡", "위치로 이동", "사용 설명서", "환영합니다", "Auto Music은 차량용 하이브리드 플레이어입니다.", "제목이나 아티스트로 노래를 검색하세요.", "여기에서 컬렉션을 볼 수 있습니다. 공개 또는 비공개 목록.", "노래 화면", "목록 내에서 전문가 수준으로 음악을 관리할 수 있습니다.", "길게 눌러 드래그하면 순서가 변경됩니다.", "셔플 모드. 시스템은 각 목록에 대한 기본 설정을 기억합니다.", "중복 감지기. 제목과 아티스트별로 중복된 노래만 표시합니다.", "알파벳순 정렬 (A-Z). 검색을 돕기 위한 시각적 기능이며 선호하는 순서는 변경되지 않습니다.", "순서 고정. 현재 알파벳순을 공식 순서로 영구 저장합니다.", "수동 순서. 알파벳순 정렬 후 선호하는 순서로 돌아갑니다.", "내부 검색. 입력하면 노래로 바로 이동합니다.", "분실된 파일을 정리하고 오프라인 모드를 보장합니다.")
-        "JAPANESE" -> AppTranslations("検索", "プレイリスト", "言語", "設定", "寄付", "私のアプリケーションが気に入ったら、検討している金額を寄付できます。", "背景色を選択", "閉じる", "明るさ", "プレビュー", "ダークモード", "ダークモードではカスタムカラーが無効になります", "クラウド同期", "同期ID", "すべてのデバイスで同じIDを使用してプレイリスト를 공유하십시오.", "生成", "プレイリスト를 削除", "同期에 成功しました", "同期エラー", "自動ダウンロード", "プライベートプレイリスト", "公開プレイリスト", "公開", "秘密", "公開作成", "秘密作成", "선택됨", "タイトル、アーティスト、または歌詞で検索", "の結果が見つかりませんでした", "プレイリストに追加", "キャンセル", "✓ ダウンロード済み", "⏳ ダウンロード中...", "🌐 オンライン", "同期中...", "IDを設定", "新しいプレイリスト", "名前", "作成", "라이브러리 メンテナンス", "ファイルのクリーンアップと確認中...", "メンテナンス概要", "クリーンアップされたファイル", "再キューイングされた曲", "復元된곡", "未解決のエラー", "▶ 再生を続行", "▶ このリストを続行", "A-Z順に並べ替え", "Z-A順に並べ替え", "リスト内を検索", "この順序を固定", "カスタム順序", "重複を検索", "曲", "位置に移動", "取扱説明書", "ようこそ", "Auto Musicは車用に設計されたハイブリッドプレーヤーです。", "タイトルまたはアーティストで曲を検索します。", "ここでコレクションを確認できます。公開または非公開リスト。", "曲画面", "リスト内でプロ級の精度で音楽を管理できます。", "長押ししてドラッグすると順序が変わります。", "シャッフルモード。システムはリストごとの好みを記憶します。", "重複検出器。タイトルとアーティストで重複した曲のみを表示します。", "アルファベット順 (A-Z)。検索用の視覚的機能で、お気に入りの順序は変わりません。", "順序を固定。現在のアルファベット順を公式順序として保存します。", "手動順序。アルファベット順の後に、お気に入りの順序に戻ります。", "内部検索。入力して曲に直接ジャンプします。", "不要なファイルをクリーンアップし、オフラインモードを保証します。")
-        "ESPANOL_LATINO" -> AppTranslations("Buscar", "Listas", "Idioma", "Configuración", "Donación", "Si te gustó mi aplicación puedes donar la cantidad que consideres.", "Selecciona el color de fondo", "Cerrar", "Brillo", "Vista previa", "Modo oscuro", "El color personalizado se desactiva en modo oscuro", "Sincronización en la Nube", "ID de Sincronización", "Usa el mismo ID en todos tus dispositivos para compartir tus listas.", "Generar", "Eliminar lista", "Sincronización correcta", "Error en la sincronización", "Descargas Automáticas", "Listas Privadas", "Listas Públicas", "Pública", "Privada", "Crear Pública", "Crear Privada", "seleccionadas", "Busca por título, artista o letra", "No se han encontrado resultados para", "Añadir a la lista", "Cancelar", "✓ Descargada", "⏳ Descargando...", "🌐 Online", "Sincronizando...", "Configura el ID", "Nueva lista de reproducción", "Nombre", "Crear", "Mantenimiento de la librería", "Limpiando y verificando archivos...", "Resumen del Mantenimiento", "Archivos limpiados", "Canciones reencoladas", "Canciones restauradas", "Errores sin resolver", "▶ Continuar última reproducción", "▶ Continuar esta lista", "Ordenar A-Z", "Ordenar Z-A", "Buscar en la lista", "Fijar este orden", "Orden personalizado", "Buscar duplicados", "canciones", "Mover a posición", "Manual de Instrucciones", "Bienvenido", "Auto Music es un reproductor híbrido diseñado para el auto. Combina música online y descargas locales para que nunca pare la música.", "Busca canciones por título o artista. Toca una para escucharla o mantén presionado para agregarla a una lista.", "Aquí ves tus colecciones. Puedes crear listas Públicas (se sincronizan con tu ID en la nube) o Privadas (solo en este dispositivo).", "Pantalla de Canciones", "Dentro de una lista puedes gestionar tu música con precisión profesional.", "Mantén presionado y arrastra para cambiar el orden. Si llegas al borde, la lista se desplazará sola.", "Modo Aleatorio. El sistema recordará tu preferencia para cada lista, incluso en Android Auto.", "Detector de Duplicados. Filtra la lista para mostrar solo las canciones repetidas por título y artista.", "Orden Alfabético (A-Z). Es solo visual para ayudarte a buscar, no cambia tu orden favorito.", "Fijar Orden. Guarda permanentemente el orden alfabético actual como tu orden oficial.", "Orden Manual. Vuelve a tu orden favorito después de haber ordenado alfabéticamente.", "Buscador Interno. Escribe para saltar directamente a una canción sin detener la música.", "Limpia archivos huérfanos, repara la base de datos y asegura que todas tus canciones estén listas para el modo offline.")
-        else -> AppTranslations("Buscar", "Listas", "Idioma", "Configuración", "Donación", "Si te gustó mi aplicación puedes donar la cantidad que consideres.", "Selecciona el color de fondo", "Cerrar", "Brillo", "Vista previa", "Modo oscuro", "El color personalizado se desactiva en modo oscuro", "Sincronización en la Nube", "ID de Sincronización", "Usa el mismo ID en todos tus dispositivos para compartir tus listas.", "Generar", "Eliminar lista", "Sincronización correcta", "Error en la sincronización", "Descargas Automáticas", "Listas Privadas", "Listas Públicas", "Pública", "Privada", "Crear Pública", "Crear Privada", "seleccionadas", "Busca por título, artista o letra", "No se han encontrado resultados para", "Añadir a la lista", "Cancelar", "✓ Descargada", "⏳ Descargando...", "🌐 Online", "Sincronizando...", "Configura el ID", "Nueva lista de reproducción", "Nombre", "Crear", "Mantenimiento de la librería", "Limpiando y verificando archivos...", "Resumen del Mantenimiento", "Archivos limpiados", "Canciones reencoladas", "Canciones restauradas", "Errores sin resolver", "▶ Continuar última reproducción", "▶ Continuar esta lista", "Ordenar A-Z", "Ordenar Z-A", "Buscar en la lista", "Fijar este orden", "Orden personalizado", "Buscar duplicados", "canciones", "Mover a posición", "Manual de Instrucciones", "Bienvenido", "Auto Music es un reproductor híbrido diseñado para el coche. Combina música online y descargas locales para que nunca pare la música.", "Busca canciones por título o artista. Toca una para escucharla o mantén pulsado para añadirla a una lista.", "Aquí ves tus colecciones. Puedes crear listas Públicas (se sincronizan con tu ID en la nube) o Privadas (solo en este dispositivo).", "Pantalla de Canciones", "Dentro de una lista puedes gestionar tu música con precisión profesional.", "Mantén pulsado y arrastra para cambiar el orden. Si llegas al borde, la lista se desplazará sola.", "Modo Aleatorio. El sistema recordará tu preferencia para cada lista, incluso en Android Auto.", "Detector de Duplicados. Filtra la lista para mostrar solo las canciones repetidas por título y artista.", "Orden Alfabético (A-Z). Es solo visual para ayudarte a buscar, no cambia tu orden favorito.", "Fijar Orden. Guarda permanentemente el orden alfabético actual como tu orden oficial.", "Orden Manual. Vuelve a tu orden favorito después de haber ordenado alfabéticamente.", "Buscador Interno. Escribe para saltar directamente a una canción sin detener la música.", "Limpia archivos huérfanos, repara la base de datos y asegura que todas tus canciones estén listas para el modo offline.")
+        "ENGLISH" -> english
+        "CATALA" -> english.copy(
+            search = "Cerca", playlists = "Llistes", language = "Idioma", configTitle = "Configuració", donationTitle = "Donació",
+            donationText = "Si t'ha agradat la meva aplicació pots fer una donació amb l'import que consideris.",
+            selectColor = "Selecciona el color de fons", close = "Tancar", brightness = "Brillantor", preview = "Vista prèvia",
+            darkMode = "Mode fosc", darkThemeNote = "El color personalitzat es desactiva en mode fosc",
+            syncTitle = "Sincronització al Núvol", syncIdLabel = "ID de Sincronització",
+            syncHelp = "Utilitza el mateix ID en tots els dispositius per compartir les teves llistes.",
+            generate = "Generar", deletePlaylist = "Eliminar llista", syncSuccess = "Sincronització correcta",
+            syncError = "Error en la sincronització", autoDownloadTitle = "Descàrregues Automàtiques",
+            autoDownloadPrivate = "Llistes Privades", autoDownloadPublic = "Llistes Públiques", isPublic = "Pública",
+            isPrivate = "Privada", createPublic = "Crea Pública", createPrivate = "Crea Privada",
+            selectedItems = "seleccionades", searchPlaceholder = "Busca per títol, artista o lletra",
+            noResults = "No s'han trobat resultats per a", addToPlaylist = "Afegir a la llista de reproducció",
+            cancel = "Cancel·la", downloaded = "✓ Descarregada", downloading = "⏳ Descarregant...", online = "🌐 Online",
+            syncing = "Sincronitzant...", setupId = "Configura l'ID", newPlaylist = "Nova llista de reproducció",
+            nameField = "Nom", create = "Crea", maintenanceTitle = "Manteniment de la llibreria",
+            maintenanceRunning = "Netejant i verificant fitxers...", maintenanceSummaryTitle = "Resum del Manteniment",
+            filesCleanedLabel = "Fitxers netejats", songsRequeuedLabel = "Cançons reencuades",
+            songsRestoredLabel = "Cançons restaurades", maintenanceErrorsTitle = "Errors sense resoldre",
+            resumePlayback = "▶ Continuar última reproducció", resumePlaylist = "▶ Continuar aquesta llista",
+            sortAZ = "Ordena A-Z", sortZA = "Ordena Z-A", searchInList = "Cerca a la llista",
+            fixOrder = "Fixa aquest ordre", manualOrder = "Ordre personalitzat", findDuplicates = "Busca duplicats",
+            songsCountLabel = "cançons", moveToPosition = "Moure a posició", manualTitle = "Manual d'Instruccions",
+            manWelcomeTitle = "Benvingut", manWelcomeDesc = "Auto Music és un reproductor híbrid dissenyat pel cotxe.",
+            manSearchDesc = "Busca cançons per títol o artista.",
+            manPlaylistsDesc = "Gestiona les col·leccions. Les llistes Públiques se sincronitzen amb tothom, les Privades només entre els teus dispositius.",
+            manSongsTitle = "Pantalla de Cançons", manSongsDesc = "Gestió professional de la teva música dins d'una llista.",
+            manIconDrag = "Arrossegar: Mantén premut per reordenar. La llista llisca sola als marges.",
+            manIconShuffle = "Aleatori: El sistema recorda la teva preferència per cada llista.",
+            manIconDup = "Duplicats: Filtra per mostrar només les cançons repetides.",
+            manIconAZ = "A-Z: Ordenació visual temporal per ajudar a la cerca.",
+            manIconFix = "Fixar: Desa l'ordre visual actual com el teu ordre oficial.",
+            manIconManual = "Manual: Torna al teu ordre personalitzat preferit.",
+            manIconSearch = "Cerca: Salta a una cançó sense aturar la música.",
+            manMaintenanceDesc = "Manteniment: Neteja fitxers i assegura la disponibilitat offline.",
+            manIconPlay = "Reproduir: Inicia la reproducció online o local al moment.",
+            manIconAdd = "Afegir (+): Prem aquesta icona per afegir la cançó a una llista.",
+            manConfigDark = "Mode Fosc: Canvia entre el tema clar i el fosc.",
+            manConfigAuto = "Auto-Descàrrega: Baixa automàticament les cançons de les llistes.",
+            manConfigSync = "Sincro Núvol: Posa el teu ID per tenir les llistes a tot arreu.",
+            manConfigColor = "Color de Fons: Personalitza l'aspecte de l'app en mode clar.",
+            manIconNorm = "Normalització: Botó per igualar el volum de totes les cançons d'una llista per a una conducció segura.",
+            volumeNormalization = "Igualació de Volum", equalizerTitle = "Ecualitzador", presets = "Presets",
+            reverb = "Reverberació", manEqDesc = "EQ professional de 10 bandes amb presets musicals i espais 3D pel cotxe.",
+            graphicEq = "Equalitzador Gràfic", none = "Cap", carSpace = "Espai Cotxe", mediumRoom = "Habitació Mitjana",
+            largeHall = "Sala Gran", savePreset = "Desar Preset"
+        )
+        "ESPANOL_LATINO" -> english.copy(
+            search = "Buscar", playlists = "Listas", language = "Idioma", configTitle = "Configuración", donationTitle = "Donación",
+            donationText = "Si te gustó mi aplicación puedes donar la cantidad que consideres.",
+            selectColor = "Selecciona el color de fondo", close = "Cerrar", brightness = "Brillo", preview = "Vista previa",
+            darkMode = "Modo oscuro", darkThemeNote = "El color personalizado se desactiva en modo oscuro",
+            syncTitle = "Sincronización en la Nube", syncIdLabel = "ID de Sincronización",
+            syncHelp = "Usa el mismo ID en todos tus dispositivos para compartir tus listas.",
+            generate = "Generar", deletePlaylist = "Eliminar lista", syncSuccess = "Sincronización correcta",
+            syncError = "Error en la sincronización", autoDownloadTitle = "Descargas Automáticas",
+            autoDownloadPrivate = "Listas Privadas", autoDownloadPublic = "Listas Públicas", isPublic = "Pública",
+            isPrivate = "Privada", createPublic = "Crear Pública", createPrivate = "Crear Private",
+            selectedItems = "seleccionadas", searchPlaceholder = "Busca por título, artista o letra",
+            noResults = "No se han encontrado resultados para", addToPlaylist = "Añadir a la lista",
+            cancel = "Cancelar", downloaded = "✓ Descargada", downloading = "⏳ Descargando...", online = "🌐 Online",
+            syncing = "Sincronizando...", setupId = "Configura el ID", newPlaylist = "Nueva lista de reproducción",
+            nameField = "Nombre", create = "Crear", maintenanceTitle = "Mantenimiento de la librería",
+            maintenanceRunning = "Limpiando y verificando archivos...", maintenanceSummaryTitle = "Resumen del Mantenimiento",
+            filesCleanedLabel = "Archivos limpiados", songsRequeuedLabel = "Canciones reencoladas",
+            songsRestoredLabel = "Canciones restauradas", maintenanceErrorsTitle = "Errores sin resolver",
+            resumePlayback = "▶ Continuar última reproducción", resumePlaylist = "▶ Continuar esta lista",
+            sortAZ = "Ordenar A-Z", sortZA = "Ordenar Z-A", searchInList = "Buscar en la lista",
+            fixOrder = "Fijar este orden", manualOrder = "Orden personalizado", findDuplicates = "Buscar duplicados",
+            songsCountLabel = "canciones", moveToPosition = "Mover a posición", manualTitle = "Manual de Instrucciones",
+            manWelcomeTitle = "Bienvenido", manWelcomeDesc = "Auto Music es un reproductor híbrido diseñado para el auto.",
+            manSearchDesc = "Busca canciones por título o artista.",
+            manPlaylistsDesc = "Gestiona tus colecciones. Las listas Públicas se sincronizan con cualquier ID; las Privadas solo entre usuarios con el mismo ID.",
+            manSongsTitle = "Pantalla de Canciones", manSongsDesc = "Control profesional de tu música dentro de una lista.",
+            manIconDrag = "Arrastrar: Mantén presionado y mueve para cambiar el orden. La lista se desplaza sola en los bordes.",
+            manIconShuffle = "Aleatorio: El sistema recordará tu preferencia para cada lista, incluso en Android Auto.",
+            manIconDup = "Duplicados: Filtra la lista para mostrar solo las canciones repetidas por título y artista.",
+            manIconAZ = "A-Z: Orden visual temporal para ayudarte a buscar canciones rápido.",
+            manIconFix = "Fijar: Guarda permanentemente el orden visual actual como tu orden oficial.",
+            manIconManual = "Manual: Vuelve a tu orden favorito después de haber ordenado alfabéticamente.",
+            manIconSearch = "Buscador: Escribe para saltar directamente a una canción sin detener la música.",
+            manMaintenanceDesc = "Mantenimiento: Limpia archivos huérfanos y asegura que tus canciones estén listas para usar offline.",
+            manIconPlay = "Reproducir: Presiona el ícono de play para iniciar la reproducción online o local al instante.",
+            manIconAdd = "Agregar (+): Presiona este ícono para guardar la canción en una de tus listas.",
+            manConfigDark = "Modo Oscuro: Cambia entre el tema claro y el oscuro para mayor comodidad.",
+            manConfigAuto = "Auto-Descarga: Permite que la app baje automáticamente las canciones de tus listas.",
+            manConfigSync = "Sincro en Nube: Ingresa tu ID para tener tus listas en todos tus dispositivos.",
+            manConfigColor = "Color de Fondo: Personaliza el aspecto de la aplicación cuando no usas el modo oscuro.",
+            manIconNorm = "Normalización: Botón para igualar el volumen de todas las canciones de una lista para una conducción segura.",
+            volumeNormalization = "Igualar Volumen", equalizerTitle = "Ecualizador", presets = "Ajustes Pregrabados",
+            reverb = "Reverberación", manEqDesc = "EQ profesional de 10 bandas con perfiles musicales y simulación de espacios 3D para el coche.",
+            graphicEq = "Ecualizador Gráfico", none = "Ninguno", carSpace = "Espacio Coche", mediumRoom = "Habitación Pequeña",
+            largeHall = "Gran Sala", savePreset = "Guardar Ajuste"
+        )
+        "GALEGO" -> english.copy(
+            search = "Cerca", playlists = "Listas", language = "Lingua", configTitle = "Configuración", donationTitle = "Doazón",
+            donationText = "Se che gustou a miña aplicació podes doar o importe que consideres.",
+            selectColor = "Selecciona a cor de fondo", close = "Pechar", brightness = "Brillo", preview = "Vista previa",
+            darkMode = "Modo escuro", darkThemeNote = "A cor personalizada desactívase no modo escuro",
+            syncTitle = "Sincronización na Nube", syncIdLabel = "ID de Sincronización",
+            syncHelp = "Usa o mesmo ID en todos os teus dispositivos.",
+            generate = "Xerar", deletePlaylist = "Eliminar lista", syncSuccess = "Sincronización correcta",
+            syncError = "Error na sincronización", autoDownloadTitle = "Descargas Automáticas",
+            autoDownloadPrivate = "Listas Privadas", autoDownloadPublic = "Listas Públicas", isPublic = "Pública",
+            isPrivate = "Privada", createPublic = "Crear Pública", createPrivate = "Crear Privada",
+            selectedItems = "seleccionadas", searchPlaceholder = "Busca por título, artista ou letra",
+            noResults = "Non se atoparon resultados para", addToPlaylist = "Engadir á lista de reprodución",
+            cancel = "Cancelar", downloaded = "✓ Descargada", downloading = "⏳ Descargando...", online = "🌐 En liña",
+            syncing = "Sincronizando...", setupId = "Configura o ID", newPlaylist = "Nova lista de reprodución",
+            nameField = "Nome", create = "Crear", maintenanceTitle = "Mantemento da librería",
+            maintenanceRunning = "Limpando e verificando ficheiros...", maintenanceSummaryTitle = "Resumo do Mantemento",
+            filesCleanedLabel = "Ficheiros limpados", songsRequeuedLabel = "Cancións reencoladas",
+            songsRestoredLabel = "Cancións restauradas", maintenanceErrorsTitle = "Erros sin resolver",
+            resumePlayback = "▶ Continuar última reproducció", resumePlaylist = "▶ Continuar esta lista",
+            sortAZ = "Ordenar A-Z", sortZA = "Ordenar Z-A", searchInList = "Buscar na lista",
+            fixOrder = "Fixar esta orde", manualOrder = "Orde personalizada", findDuplicates = "Buscar duplicados",
+            songsCountLabel = "cancións", moveToPosition = "Mover a posición", manualTitle = "Manual de Instrucións",
+            manWelcomeTitle = "Benvido", manWelcomeDesc = "Auto Music é un reprodutor híbrid para o coche.",
+            manSearchDesc = "Atopa cancións por título ou artista.",
+            manPlaylistsDesc = "Xestiona as túas listas. As Públicas compártense con calquera; as Privadas só entre os teus dispositivos.",
+            manSongsTitle = "Pantalla de Cancións", manSongsDesc = "Xestión profesional das túas cancións nunha lista.",
+            manIconDrag = "Arrastrar: Mantén premido para reordenar. La lista móvese sola.",
+            manIconShuffle = "Aleatorio: Lembra a túa preferencia para cada lista.",
+            manIconDup = "Duplicados: Filtra para amosar só cancións repetidas.",
+            manIconAZ = "A-Z: Ordenación visual temporal para buscar.",
+            manIconFix = "Fixar: Garda a orde actual como a oficial.",
+            manIconManual = "Manual: Volve á túa orde personalizada favorita.",
+            manIconSearch = "Cerca: Salta á canción sen parar a música.",
+            manMaintenanceDesc = "Mantemento: Asegura que todo estea listo para usar sen conexión.",
+            manIconPlay = "Reproducir: Inicia a música online o local de inmediato.",
+            manIconAdd = "Engadir (+): Usa esta icona para gardar a canción nunha lista.",
+            manConfigDark = "Modo Escuro: Cambia entre el tema claro e o escuro.",
+            manConfigAuto = "Descarga Auto: Baixa as cancións das listas de xeito automático.",
+            manConfigSync = "Nube: Pon o teu ID para sincronizar listas entre dispositivos.",
+            manConfigColor = "Cor de fondo: Personaliza o estilo da app no modo claro.",
+            manIconNorm = "Normalización: Botón para igualar o volume de todas as cancións dunha lista para una condución segura.",
+            volumeNormalization = "Normalización de Volume", equalizerTitle = "Ecualizador", presets = "Presets",
+            reverb = "Reverberación", manEqDesc = "EQ de 10 bandas con sons de estudio e espazos 3D para o coche.",
+            graphicEq = "Ecualizador Gráfico", none = "Ningunha", carSpace = "Espazo Coche", mediumRoom = "Cuarto Medio",
+            largeHall = "Sala Grande", savePreset = "Gardar Preset"
+        )
+        "EUSKARA" -> english.copy(
+            search = "Bilatu", playlists = "Zerrendak", language = "Hizkuntza", configTitle = "Konfigurazioa",
+            donationTitle = "Dohaintza", donationText = "Nire aplikazioa gustatu bazaizu, nahi duzun zenbatekoa eman dezakezu.",
+            selectColor = "Hautatu atzeko planoko kolorea", close = "Itxi", brightness = "Distira", preview = "Aurreikuspena",
+            darkMode = "Modu iluna", darkThemeNote = "Kolore pertsonalizatua desgaituta dago modu ilunean",
+            syncTitle = "Hodeiko Sinkronizazioa", syncIdLabel = "Sinkronizazio IDa", syncHelp = "Erabili ID bera gailu guztietan.",
+            generate = "Sortu", deletePlaylist = "Zerrenda ezabatu", syncSuccess = "Sinkronizazio arrakastatsua",
+            syncError = "Errorea sinkronizatzean", autoDownloadTitle = "Deskarga Automatikoak",
+            autoDownloadPrivate = "Zerrenda Pribatuak", autoDownloadPublic = "Zerrenda Publikoak", isPublic = "Publikoa",
+            isPrivate = "Pribatua", createPublic = "Publikoa Sortu", createPrivate = "Pribatua Sortu",
+            selectedItems = "hautatuta", searchPlaceholder = "Bilatu izenburuaren, artistaren edo letren arabera",
+            noResults = "Ez da emaitzarik aurkitu honetarako:", addToPlaylist = "Gehitu erreprodukzio-zerrendara",
+            cancel = "Utzi", downloaded = "✓ Deskargatuta", downloading = "⏳ Deskargatzen...", online = "🌐 Online",
+            syncing = "Sinkronizatzen...", setupId = "Konfiguratu IDa", newPlaylist = "Erreprodukzio-zerrenda berria",
+            nameField = "Izena", create = "Sortu", maintenanceTitle = "Liburutegiaren mantentzea",
+            maintenanceRunning = "Fitxategiak garbitzen eta egiaztatzen...", maintenanceSummaryTitle = "Mantentze-lanen laburpena",
+            filesCleanedLabel = "Garbitutako fitxategiak", songsRequeuedLabel = "Berriro ilaran jarritako abestiak",
+            songsRestoredLabel = "Leheneratutako abestiak", maintenanceErrorsTitle = "Ebatzi gabeko erroreak",
+            resumePlayback = "▶ Erreprodukzioa jarraitu", resumePlaylist = "▶ Erreprodukzio-zerrenda jarraitu",
+            sortAZ = "Ordenatu A-Z", sortZA = "Ordenatu Z-A", searchInList = "Zerrendan bilatu",
+            fixOrder = "Finkatu ordena hau", manualOrder = "Ordena pertsonalizatua", findDuplicates = "Bilatu bikoiztuak",
+            songsCountLabel = "abestiak", moveToPosition = "Mugitu posiziora", manualTitle = "Argibide Eskuliburua",
+            manWelcomeTitle = "Ongi etorri", manWelcomeDesc = "Auto Music autorako diseinatutako erreproduzitzaile hibridoa da.",
+            manSearchDesc = "Bilatu abestiak izenburuaren edo artistaren arabera.",
+            manPlaylistsDesc = "Kudeatu bildumak. Zerrenda publikoak partekatu egiten dira, pribatuak gailu berberen artean soilik.",
+            manSongsTitle = "Abestien Pantaila", manSongsDesc = "Zure abestien kudeaketa profesionala zerrenda baten barruan.",
+            manIconDrag = "Arrastatu: Eduki sakatuta ordena aldatzeko. Zerrenda bera mugitzen da.",
+            manIconShuffle = "Ausazkoa: Sistemak zerrenda bakoitzeko hobespena gogoratzen du.",
+            manIconDup = "Bikoiztuak: Errepikatutako abestiak soilik erakusteko iragazkia.",
+            manIconAZ = "A-Z: Bilatzeko aldi baterako ordenazio bisuala.",
+            manIconFix = "Finkatu: Uneko ordena bisuala ordena ofizial gisa gordetzen du.",
+            manIconManual = "Eskuzkoa: Zure gogoko ordena pertsonalizatura itzultzen da.",
+            manIconSearch = "Bilatu: Abesti batera zuzenean joateko audioa gelditu gabe.",
+            manMaintenanceDesc = "Mantentzea: Fitxategiak garbitu eta offline prestatu.",
+            manIconPlay = "Erreproduzitu: Online edo tokiko erreprodukzioa berehala hasi.",
+            manIconAdd = "Gehitu (+): Erabili ikur hau abestia zerrenda batean gordetzeko.",
+            manConfigDark = "Modu Iluna: Gaia argia eta ilunaren artean aldatu.",
+            manConfigAuto = "Auto-Deskarga: Zerrendetako abestiak automatikoki deskargatu.",
+            manConfigSync = "Sinkro: Zure IDa sartu gailuen artean sinkronizatzeko.",
+            manConfigColor = "Atzeko kolorea: App-aren itxura pertsonalizatu modu argian.",
+            manIconNorm = "Normalizazioa: Zerrendako abesti guztien bolumena berdintzeko botoia, gidatze segururako.",
+            volumeNormalization = "Bolumena Berdindu", equalizerTitle = "Ekualizadorea", presets = "Presets",
+            reverb = "Erreberberazioa", manEqDesc = "10 bandako EQ profesionala presets musikaltiekin eta autorako 3D espazioekin.",
+            graphicEq = "Ekualizadore Grafikoa", none = "Bat ere ez", carSpace = "Auto Gunea", mediumRoom = "Gela Ertaina",
+            largeHall = "Areto Handia", savePreset = "Gorde Preset"
+        )
+        "FRANCAIS" -> english.copy(
+            search = "Recherche", playlists = "Listes", language = "Langue", configTitle = "Configuration",
+            volumeNormalization = "Normalisation", equalizerTitle = "Égaliseur", carSpace = "Espace Voiture"
+        )
+        "DEUTSCH" -> english.copy(
+            search = "Suche", playlists = "Listen", language = "Sprache", configTitle = "Konfiguration",
+            volumeNormalization = "Lautstärkenormalisierung", equalizerTitle = "Equalizer", carSpace = "Auto-Raum"
+        )
+        "ITALIANO" -> english.copy(
+            search = "Cerca", playlists = "Playlist", language = "Lingua", configTitle = "Configurazione",
+            volumeNormalization = "Normalizzazione Volume", equalizerTitle = "Equalizzatore", carSpace = "Spazio Auto"
+        )
+        "KOREAN" -> english.copy(
+            search = "검색", playlists = "재생 목록", language = "언어", configTitle = "설정",
+            volumeNormalization = "음량 정규화", equalizerTitle = "이퀄라이저", carSpace = "자동차 공간"
+        )
+        "JAPANESE" -> english.copy(
+            search = "検索", playlists = "プレイリスト", language = "言語", configTitle = "設定",
+            volumeNormalization = "音量の正規化", equalizerTitle = "イコライザー", carSpace = "車内空間"
+        )
+        else -> english.copy(
+            search = "Buscar", playlists = "Listas", language = "Idioma", configTitle = "Configuración", donationTitle = "Donación",
+            donationText = "Si te gustó mi aplicación puedes donar la cantidad que consideres.",
+            selectColor = "Selecciona el color de fondo", close = "Cerrar", brightness = "Brillo", preview = "Vista previa",
+            darkMode = "Modo oscuro", darkThemeNote = "El color personalizado se desactiva en modo oscuro",
+            syncTitle = "Sincronización en la Nube", syncIdLabel = "ID de Sincronización",
+            syncHelp = "Usa el mismo ID en todos tus dispositivos para compartir tus listas.",
+            generate = "Generar", deletePlaylist = "Eliminar lista", syncSuccess = "Sincronización correcta",
+            syncError = "Error en la sincronización", autoDownloadTitle = "Descargas Automáticas",
+            autoDownloadPrivate = "Listas Privadas", autoDownloadPublic = "Listas Públicas", isPublic = "Pública",
+            isPrivate = "Privada", createPublic = "Crear Pública", createPrivate = "Crear Private",
+            selectedItems = "seleccionadas", searchPlaceholder = "Busca por título, artista o letra",
+            noResults = "No se han encontrado resultados para", addToPlaylist = "Añadir a la lista",
+            cancel = "Cancelar", downloaded = "✓ Descargada", downloading = "⏳ Descargando...", online = "🌐 Online",
+            syncing = "Sincronizando...", setupId = "Configura el ID", newPlaylist = "Nueva lista de reproducción",
+            nameField = "Nombre", create = "Crear", maintenanceTitle = "Mantenimiento de la librería",
+            maintenanceRunning = "Limpiando y verificando archivos...", maintenanceSummaryTitle = "Resumen del Mantenimiento",
+            filesCleanedLabel = "Archivos limpiados", songsRequeuedLabel = "Canciones reencoladas",
+            songsRestoredLabel = "Canciones restauradas", maintenanceErrorsTitle = "Errores sin resolver",
+            resumePlayback = "▶ Continuar última reproducción", resumePlaylist = "▶ Continuar esta lista",
+            sortAZ = "Ordenar A-Z", sortZA = "Ordenar Z-A", searchInList = "Buscar en la lista",
+            fixOrder = "Fijar este orden", manualOrder = "Orden personalizado", findDuplicates = "Buscar duplicados",
+            songsCountLabel = "canciones", moveToPosition = "Mover a posición", manualTitle = "Manual de Instrucciones",
+            manWelcomeTitle = "Bienvenido", manWelcomeDesc = "Auto Music es un reproductor híbrido diseñado para el coche.",
+            manSearchDesc = "Busca canciones por título o artista.",
+            manPlaylistsDesc = "Gestiona tus colecciones. Las listas Públicas se sincronizan con cualquier ID; las Privadas solo entre usuarios con el mismo ID.",
+            manSongsTitle = "Pantalla de Canciones", manSongsDesc = "Control profesional de tu música dentro de una lista.",
+            manIconDrag = "Arrastrar: Mantén pulsado y mueve para cambiar el orden. La lista se desplaza sola en los bordes.",
+            manIconShuffle = "Aleatorio: El sistema recordará tu preferencia para cada lista, incluso en Android Auto.",
+            manIconDup = "Duplicados: Filtra la lista para mostrar solo las canciones repetidas por título y artista.",
+            manIconAZ = "A-Z: Orden visual temporal para ayudarte a buscar canciones rápido.",
+            manIconFix = "Fijar: Guarda permanentemente el orden visual actual como tu orden oficial.",
+            manIconManual = "Manual: Vuelve a tu orden favorito después de haber ordenado alfabéticamente.",
+            manIconSearch = "Buscador: Escribe para saltar directamente a una canción sin detener la música.",
+            manMaintenanceDesc = "Mantenimiento: Limpia archivos huérfanos y asegura que tus canciones estén listas para usar offline.",
+            manIconPlay = "Reproducir: Pulsa el icono de play para iniciar la reproducción online o local al instante.",
+            manIconAdd = "Añadir (+): Pulsa este icono para guardar la canción en una de tus listas.",
+            manConfigDark = "Modo Oscuro: Cambia entre el tema claro y el oscuro para mayor comodidad.",
+            manConfigAuto = "Auto-Descarga: Permite que la app baje automáticamente las canciones de tus listas.",
+            manConfigSync = "Sincro en Nube: Introduce tu ID para tener tus listas en todos tus dispositivos.",
+            manConfigColor = "Color de Fondo: Personaliza el aspecto de la aplicación cuando no usas el modo oscuro.",
+            manIconNorm = "Normalización: Botón para igualar el volumen de todas las canciones de una lista para una conducción segura.",
+            volumeNormalization = "Igualar Volumen", equalizerTitle = "Ecualizador", presets = "Ajustes Pregrabados",
+            reverb = "Reverberación", manEqDesc = "EQ profesional de 10 bandas con perfiles musicales y simulación de espacios 3D para el coche.",
+            graphicEq = "Ecualizador Gráfico", none = "Ninguno", carSpace = "Espacio Coche", mediumRoom = "Habitación Pequeña",
+            largeHall = "Gran Sala", savePreset = "Guardar Ajuste"
+        )
     }
 }

@@ -13,7 +13,8 @@ data class Playlist(
     val cloudId: String? = null,
     val lastPlayedSongId: String? = null,
     val lastPlayedPositionMs: Long = 0,
-    val isShuffle: Boolean = false
+    val isShuffle: Boolean = false,
+    val isVolumeNormalized: Boolean = false
 )
 
 @Entity(

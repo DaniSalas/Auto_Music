@@ -47,6 +47,9 @@ interface MusicDao {
     @Query("UPDATE playlists SET isShuffle = :shuffle WHERE id = :playlistId")
     suspend fun updatePlaylistShuffle(playlistId: Long, shuffle: Boolean)
 
+    @Query("UPDATE playlists SET isVolumeNormalized = :normalized WHERE id = :playlistId")
+    suspend fun updatePlaylistNormalization(playlistId: Long, normalized: Boolean)
+
     @Delete
     suspend fun deletePlaylist(playlist: Playlist)
 

@@ -13,6 +13,12 @@ data class SearchBody(
 )
 
 @Serializable
+data class BrowseBody(
+    val browseId: String,
+    val context: InnerTubeContext
+)
+
+@Serializable
 data class InnerTubeContext(
     val client: InnerTubeClient,
     val user: User = User(),
@@ -67,7 +73,31 @@ data class User(
 @Serializable
 data class InnerTubeResponse(
     val contents: Contents? = null,
+    val continuationContents: ContinuationContents? = null,
+    val header: Header? = null,
     val responseContext: ResponseContext? = null
+)
+
+@Serializable
+data class ContinuationContents(
+    val musicShelfContinuation: MusicShelfRenderer? = null,
+    val musicPlaylistShelfContinuation: MusicShelfRenderer? = null,
+    val sectionListContinuation: SectionListContinuation? = null
+)
+
+@Serializable
+data class SectionListContinuation(
+    val contents: List<SectionContent>? = null
+)
+
+@Serializable
+data class Header(
+    val musicDetailHeaderRenderer: MusicDetailHeaderRenderer? = null
+)
+
+@Serializable
+data class MusicDetailHeaderRenderer(
+    val title: Runs? = null
 )
 
 @Serializable
@@ -78,6 +108,24 @@ data class ResponseContext(
 @Serializable
 data class Contents(
     val tabbedSearchResultsRenderer: TabbedSearchResultsRenderer? = null,
+    val sectionListRenderer: SectionListRenderer? = null,
+    val twoColumnBrowseResultsRenderer: TwoColumnBrowseResultsRenderer? = null,
+    val singleColumnBrowseResultsRenderer: SingleColumnBrowseResultsRenderer? = null
+)
+
+@Serializable
+data class TwoColumnBrowseResultsRenderer(
+    val secondaryContents: SecondaryContents? = null,
+    val tabs: List<Tab>? = null
+)
+
+@Serializable
+data class SingleColumnBrowseResultsRenderer(
+    val tabs: List<Tab>? = null
+)
+
+@Serializable
+data class SecondaryContents(
     val sectionListRenderer: SectionListRenderer? = null
 )
 
@@ -114,7 +162,59 @@ data class SectionContent(
     @JsonNames("musicPlaylistShelfRenderer")
     val musicPlaylistShelfRenderer: MusicShelfRenderer? = null,
     @JsonNames("musicImmersiveCarouselShelfRenderer")
-    val musicCarouselShelfRenderer: MusicShelfRenderer? = null
+    val musicCarouselShelfRenderer: MusicShelfRenderer? = null,
+    val musicCardShelfRenderer: MusicCardShelfRenderer? = null,
+    val itemSectionRenderer: ItemSectionRenderer? = null,
+    val musicPlaylistShelfContinuation: MusicShelfRenderer? = null,
+    val gridRenderer: GridRenderer? = null
+)
+
+@Serializable
+data class GridRenderer(
+    val items: List<MusicItem>? = null,
+    val header: GridHeader? = null
+)
+
+@Serializable
+data class GridHeader(
+    val gridHeaderRenderer: GridHeaderRenderer? = null
+)
+
+@Serializable
+data class GridHeaderRenderer(
+    val title: Runs? = null
+)
+
+@Serializable
+data class MusicCardShelfRenderer(
+    val header: MusicCardShelfHeader? = null,
+    val contents: List<MusicItem>? = null,
+    val buttons: List<ButtonRenderer>? = null
+)
+
+@Serializable
+data class MusicCardShelfHeader(
+    val musicCardShelfHeaderBasicRenderer: MusicCardShelfHeaderBasic? = null
+)
+
+@Serializable
+data class MusicCardShelfHeaderBasic(
+    val title: Runs? = null
+)
+
+@Serializable
+data class ButtonRenderer(
+    val buttonRenderer: ButtonContent? = null
+)
+
+@Serializable
+data class ButtonContent(
+    val navigationEndpoint: NavigationEndpoint? = null
+)
+
+@Serializable
+data class ItemSectionRenderer(
+    val contents: List<SectionContent>? = null
 )
 
 @Serializable
@@ -144,12 +244,19 @@ data class PlaylistItemData(
 
 @Serializable
 data class NavigationEndpoint(
-    val watchEndpoint: WatchEndpoint? = null
+    val watchEndpoint: WatchEndpoint? = null,
+    val browseEndpoint: BrowseEndpoint? = null
 )
 
 @Serializable
 data class WatchEndpoint(
-    val videoId: String? = null
+    val videoId: String? = null,
+    val playlistId: String? = null
+)
+
+@Serializable
+data class BrowseEndpoint(
+    val browseId: String? = null
 )
 
 @OptIn(ExperimentalSerializationApi::class)
@@ -198,4 +305,13 @@ data class ThumbnailData(
 @Serializable
 data class ThumbnailUrl(
     val url: String? = null
+)
+
+@Serializable
+data class YouTubePlaylist(
+    val id: String,
+    val title: String,
+    val author: String,
+    val trackCount: Int,
+    val thumbnailUrl: String
 )

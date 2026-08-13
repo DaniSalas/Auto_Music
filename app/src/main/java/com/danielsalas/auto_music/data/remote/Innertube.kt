@@ -31,7 +31,12 @@ object InnertubeConstants {
 }
 
 object Innertube {
-    private val json = Json { ignoreUnknownKeys = true; explicitNulls = false; encodeDefaults = true; coerceInputValues = true }
+    private val json = Json { 
+        ignoreUnknownKeys = true 
+        explicitNulls = false 
+        encodeDefaults = true 
+        coerceInputValues = true 
+    }
 
     val client = HttpClient(OkHttp) {
         install(ContentNegotiation) { json(json) }
@@ -74,36 +79,73 @@ object Innertube {
         }
     }
 
-    suspend fun search(query: String): InnerTubeResponse? {
+    suspend fun search(query: String, params: String? = null): InnerTubeResponse? {
+        if (visitorData == null) fetchVisitorData()
         return try {
             val clientType = YouTubeClient.WEB_REMIX
             val context = clientType.toContext(visitorData)
-            // Enhanced search params for "Songs only" and "More results"
+            
             val response = client.post("${InnertubeConstants.YOUTUBE_MUSIC_URL}/youtubei/v1/search") {
                 contentType(ContentType.Application.Json)
-                header("X-YouTube-Client-Name", clientType.clientId)
-                header("X-YouTube-Client-Version", clientType.clientVersion)
-                header("X-Goog-Api-Key", clientType.apiKey)
-                header("X-Origin", InnertubeConstants.YOUTUBE_MUSIC_URL)
+                header("Accept", "application/json")
+                header("Accept-Language", "en-US,en;q=0.9")
                 header("X-Goog-Api-Format-Version", "1")
+                header("X-YouTube-Client-Name", "67")
+                header("X-YouTube-Client-Version", "1.20250416.01.00")
+                header("X-Goog-Api-Key", "AIzaSyDyT5W0Jh49F30Pqqtyfdf7pDLFKLJoAnw")
+                header("X-Origin", InnertubeConstants.YOUTUBE_MUSIC_URL)
                 header(HttpHeaders.Referrer, "${InnertubeConstants.YOUTUBE_MUSIC_URL}/")
                 visitorData?.let { header("X-Goog-Visitor-Id", it) }
-                userAgent(clientType.userAgent)
-                parameter("key", clientType.apiKey)
+                userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.3")
+                parameter("key", "AIzaSyDyT5W0Jh49F30Pqqtyfdf7pDLFKLJoAnw")
+                parameter("prettyPrint", "false")
+                
                 setBody(SearchBody(
                     query = query, 
                     context = context,
-                    params = "EgWKAQIIAWoKEAkQAxAEEAkQBQ%3D%3D" // Filter for SONGS specifically
+                    params = params ?: "EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D"
                 ))
             }
-            response.body<InnerTubeResponse>()
+            if (response.status.value !in 200..299) return null
+            json.decodeFromString<InnerTubeResponse>(response.bodyAsText())
         } catch (e: Exception) { 
             Log.e("Innertube", "Search error: ${e.message}")
             null 
         }
     }
 
+    suspend fun browse(browseId: String): InnerTubeResponse? {
+        if (visitorData == null) fetchVisitorData()
+        return try {
+            val clientType = YouTubeClient.WEB_REMIX
+            val context = clientType.toContext(visitorData)
+            
+            val response = client.post("${InnertubeConstants.YOUTUBE_MUSIC_URL}/youtubei/v1/browse") {
+                contentType(ContentType.Application.Json)
+                header("Accept", "application/json")
+                header("Accept-Language", "en-US,en;q=0.9")
+                header("X-Goog-Api-Format-Version", "1")
+                header("X-YouTube-Client-Name", "67")
+                header("X-YouTube-Client-Version", "1.20250416.01.00")
+                header("X-Goog-Api-Key", "AIzaSyDyT5W0Jh49F30Pqqtyfdf7pDLFKLJoAnw")
+                header("X-Origin", InnertubeConstants.YOUTUBE_MUSIC_URL)
+                header(HttpHeaders.Referrer, "${InnertubeConstants.YOUTUBE_MUSIC_URL}/")
+                visitorData?.let { header("X-Goog-Visitor-Id", it) }
+                userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.3")
+                parameter("key", "AIzaSyDyT5W0Jh49F30Pqqtyfdf7pDLFKLJoAnw")
+                parameter("prettyPrint", "false")
+                setBody(BrowseBody(browseId = browseId, context = context))
+            }
+            if (response.status.value !in 200..299) return null
+            json.decodeFromString<InnerTubeResponse>(response.bodyAsText())
+        } catch (e: Exception) {
+            Log.e("Innertube", "Browse error: ${e.message}")
+            null
+        }
+    }
+
     suspend fun player(videoId: String, clientType: YouTubeClient): PlayerResponse? {
+        if (visitorData == null) fetchVisitorData()
         return try {
             val context = clientType.toContext(visitorData)
             val body = PlayerBody(
@@ -136,10 +178,14 @@ object Innertube {
                 
                 userAgent(clientType.userAgent)
                 parameter("key", clientType.apiKey)
+                parameter("prettyPrint", "false")
                 setBody(body)
             }
             if (response.status.value !in 200..299) return null
-            response.body<PlayerResponse>()
-        } catch (e: Exception) { null }
+            json.decodeFromString<PlayerResponse>(response.bodyAsText())
+        } catch (e: Exception) { 
+            Log.e("Innertube", "Player error for $videoId: ${e.message}")
+            null 
+        }
     }
 }

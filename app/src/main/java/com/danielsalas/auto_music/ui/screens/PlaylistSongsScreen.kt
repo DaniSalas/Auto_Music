@@ -20,6 +20,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
@@ -48,8 +49,8 @@ fun PlaylistSongsScreen(
     val initialSongs by viewModel.getSongsInPlaylist(playlist.id).collectAsState(initial = emptyList())
     var sortMode by remember { mutableStateOf(SortMode.MANUAL) }
     var isShuffle by remember(playlist.id) { mutableStateOf(playlist.isShuffle) }
+    var isNormalized by remember(playlist.id) { mutableStateOf(playlist.isVolumeNormalized) }
     
-    // Efficiently calculate stats and duplicates
     val stats = remember(initialSongs) {
         val totalSec = initialSongs.sumOf { it.duration }
         val h = totalSec / 3600; val m = (totalSec % 3600) / 60
@@ -58,8 +59,7 @@ fun PlaylistSongsScreen(
     }
 
     val duplicateIds = remember(initialSongs) {
-        if (initialSongs.size > 2000) emptySet() // Safety limit for extreme lists
-        else initialSongs.groupBy { "${it.title.lowercase().trim()}|${it.artist.lowercase().trim()}" }
+        initialSongs.groupBy { "${it.title.lowercase().trim()}|${it.artist.lowercase().trim()}" }
             .filter { it.value.size > 1 }.flatMap { it.value }.map { it.id }.toSet()
     }
 
@@ -72,21 +72,15 @@ fun PlaylistSongsScreen(
         }
     }
     
-    // Stable drag state management
     var dragSongs by remember(playlist.id) { mutableStateOf(initialSongs) }
     LaunchedEffect(initialSongs) {
-        // Only reset local list if size changes to preserve order during downloads
-        if (dragSongs.size != initialSongs.size) {
-            dragSongs = initialSongs
-        }
+        if (dragSongs.size != initialSongs.size) dragSongs = initialSongs
     }
     
     val activeSongs = if (sortMode == SortMode.MANUAL) dragSongs else displayedSongs
-
     val selectedSongs = remember { mutableStateListOf<Song>() }
     val isSelectionMode by remember { derivedStateOf { selectedSongs.isNotEmpty() } }
     val listState = rememberLazyListState()
-    val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
 
     var draggedItemIndex by remember { mutableStateOf<Int?>(null) }
@@ -98,7 +92,6 @@ fun PlaylistSongsScreen(
     var localSearchQuery by remember { mutableStateOf("") }
     var showMoveDialog by remember { mutableStateOf<Song?>(null) }
 
-    // Centralized download status observer (Ultra-efficient)
     var pendingIds by remember { mutableStateOf(emptySet<String>()) }
     LaunchedEffect(Unit) {
         while(true) {
@@ -110,20 +103,6 @@ fun PlaylistSongsScreen(
 
     LaunchedEffect(playlist.id) { viewModel.checkAndDownloadPlaylist(playlist.id) }
 
-    LaunchedEffect(initialSongs) {
-        if (draggedItemIndex == null && playlist.lastPlayedSongId != null && !isSearchMode && sortMode == SortMode.MANUAL) {
-            val idx = activeSongs.indexOfFirst { it.id == playlist.lastPlayedSongId }
-            if (idx != -1) listState.scrollToItem(idx)
-        }
-    }
-
-    LaunchedEffect(localSearchQuery) {
-        if (localSearchQuery.isNotBlank()) {
-            val idx = activeSongs.indexOfFirst { it.title.contains(localSearchQuery, true) || it.artist.contains(localSearchQuery, true) }
-            if (idx != -1) listState.animateScrollToItem(idx)
-        }
-    }
-
     LaunchedEffect(draggedItemIndex, dragOffsetY) {
         if (draggedItemIndex != null) {
             while (true) {
@@ -132,9 +111,8 @@ fun PlaylistSongsScreen(
                 val draggedItem = visibleItems.find { it.index == draggedItemIndex }
                 if (draggedItem != null) {
                     val containerHeight = layoutInfo.viewportEndOffset
-                    val threshold = 150f
-                    if (draggedItem.offset + dragOffsetY < threshold) { listState.scrollBy(-15f) }
-                    else if (draggedItem.offset + dragOffsetY + draggedItem.size > containerHeight - threshold) { listState.scrollBy(15f) }
+                    if (draggedItem.offset + dragOffsetY < 150f) { listState.scrollBy(-15f) }
+                    else if (draggedItem.offset + dragOffsetY + draggedItem.size > containerHeight - 150f) { listState.scrollBy(15f) }
                 }
                 delay(16)
             }
@@ -146,42 +124,68 @@ fun PlaylistSongsScreen(
 
     Scaffold(
         topBar = {
-            if (isSearchMode && !isSelectionMode) {
-                TopAppBar(
-                    title = { TextField(value = localSearchQuery, onValueChange = { localSearchQuery = it }, placeholder = { Text(strings.searchInList) }, modifier = Modifier.fillMaxWidth(), singleLine = true, colors = TextFieldDefaults.colors(focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent)) },
-                    navigationIcon = { IconButton(onClick = { isSearchMode = false; localSearchQuery = "" }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) } }
-                )
-            } else {
-                TopAppBar(
-                    title = { 
-                        Column {
-                            Text(if (isSelectionMode) "${selectedSongs.size} ${strings.selectedItems}" else playlist.name)
-                            if (!isSelectionMode) Text("${stats.first} ${strings.songsCountLabel} • ${stats.second}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary)
+            Surface(tonalElevation = 4.dp, shadowElevation = 4.dp) {
+                Column(modifier = Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 8.dp, vertical = 4.dp)) {
+                    // Line 1: Back + Name
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = { if (isSelectionMode) selectedSongs.clear() else onBack() }) {
+                            Icon(if (isSelectionMode) Icons.Default.Close else Icons.AutoMirrored.Filled.ArrowBack, null)
                         }
-                    },
-                    navigationIcon = {
-                        if (isSelectionMode) IconButton(onClick = { selectedSongs.clear() }) { Icon(Icons.Default.Close, null) }
-                        else IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) }
-                    },
-                    actions = {
+                        Text(
+                            text = if (isSelectionMode) "${selectedSongs.size} ${strings.selectedItems}" else playlist.name,
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontSize = if (playlist.name.length > 20) 18.sp else 24.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
                         if (isSelectionMode) {
-                            IconButton(onClick = { selectedSongs.forEach { viewModel.removeSongFromPlaylist(it, playlist) }; selectedSongs.clear() }) { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) }
-                        } else {
-                            IconButton(onClick = { isShuffle = !isShuffle; viewModel.updatePlaylistShuffle(playlist, isShuffle) }) { 
-                                Icon(if (isShuffle) Icons.Default.ShuffleOn else Icons.Default.Shuffle, contentDescription = null, tint = if (isShuffle) MaterialTheme.colorScheme.primary else LocalContentColor.current)
-                            }
-                            IconButton(onClick = { isSearchMode = true }) { Icon(Icons.Default.Search, null) }
-                            if (sortMode != SortMode.MANUAL) {
-                                IconButton(onClick = { sortMode = SortMode.MANUAL }) { Icon(Icons.Default.List, contentDescription = null) }
-                                if (sortMode != SortMode.DUPLICATES) { IconButton(onClick = { viewModel.reorderSongs(playlist.id, displayedSongs); sortMode = SortMode.MANUAL }) { Icon(Icons.Default.Lock, contentDescription = null) } }
-                            } else {
-                                IconButton(onClick = { sortMode = SortMode.DUPLICATES }) { Icon(Icons.Default.Difference, contentDescription = null) }
-                                IconButton(onClick = { sortMode = SortMode.AZ }) { Icon(Icons.Default.SortByAlpha, contentDescription = null) }
-                                IconButton(onClick = { sortMode = SortMode.ZA }) { Icon(Icons.Default.Sort, contentDescription = null, modifier = Modifier.graphicsLayer { rotationX = 180f }) }
+                            IconButton(onClick = { selectedSongs.forEach { viewModel.removeSongFromPlaylist(it, playlist) }; selectedSongs.clear() }) {
+                                Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error)
                             }
                         }
                     }
-                )
+                    
+                    if (!isSelectionMode) {
+                        // Line 2: Stats
+                        Text(
+                            text = "${stats.first} ${strings.songsCountLabel} • ${stats.second}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.secondary,
+                            modifier = Modifier.padding(start = 48.dp)
+                        )
+                        
+                        // Line 3: Function Icons
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
+                            IconButton(onClick = { isNormalized = !isNormalized; viewModel.updatePlaylistNormalization(playlist, isNormalized) }) { 
+                                Icon(if (isNormalized) Icons.Default.VolumeUp else Icons.Default.VolumeDown, contentDescription = strings.volumeNormalization, tint = if (isNormalized) MaterialTheme.colorScheme.primary else LocalContentColor.current)
+                            }
+                            IconButton(onClick = { isShuffle = !isShuffle; viewModel.updatePlaylistShuffle(playlist, isShuffle) }) { 
+                                Icon(if (isShuffle) Icons.Default.ShuffleOn else Icons.Default.Shuffle, contentDescription = null, tint = if (isShuffle) MaterialTheme.colorScheme.primary else LocalContentColor.current)
+                            }
+                            IconButton(onClick = { isSearchMode = !isSearchMode }) { Icon(Icons.Default.Search, null, tint = if (isSearchMode) MaterialTheme.colorScheme.primary else LocalContentColor.current) }
+                            
+                            IconButton(onClick = { sortMode = SortMode.DUPLICATES }) { Icon(Icons.Default.Difference, null, tint = if (sortMode == SortMode.DUPLICATES) MaterialTheme.colorScheme.primary else LocalContentColor.current) }
+                            IconButton(onClick = { sortMode = SortMode.AZ }) { Icon(Icons.Default.SortByAlpha, null, tint = if (sortMode == SortMode.AZ) MaterialTheme.colorScheme.primary else LocalContentColor.current) }
+                            
+                            if (sortMode != SortMode.MANUAL) {
+                                IconButton(onClick = { sortMode = SortMode.MANUAL }) { Icon(Icons.Default.List, null) }
+                                IconButton(onClick = { viewModel.reorderSongs(playlist.id, displayedSongs); sortMode = SortMode.MANUAL }) { Icon(Icons.Default.Lock, null) }
+                            }
+                        }
+                        
+                        if (isSearchMode) {
+                            TextField(
+                                value = localSearchQuery, 
+                                onValueChange = { localSearchQuery = it }, 
+                                placeholder = { Text(strings.searchInList) }, 
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), 
+                                singleLine = true,
+                                colors = TextFieldDefaults.colors(focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent)
+                            )
+                        }
+                    }
+                }
             }
         }
     ) { padding ->
@@ -191,12 +195,7 @@ fun PlaylistSongsScreen(
                 val isSelected = selectedSongs.contains(song)
                 val isMatch = localSearchQuery.isNotBlank() && (song.title.contains(localSearchQuery, true) || song.artist.contains(localSearchQuery, true))
                 val isDuplicate = sortMode == SortMode.DUPLICATES
-                
-                val downloadStatus = when {
-                    song.isDownloaded -> strings.downloaded
-                    song.id in pendingIds -> strings.downloading
-                    else -> strings.online
-                }
+                val downloadStatus = when { song.isDownloaded -> strings.downloaded; song.id in pendingIds -> strings.downloading; else -> strings.online }
 
                 Card(
                     modifier = Modifier.animateItem().fillMaxWidth().padding(vertical = 4.dp).zIndex(if (isDragging) 10f else 1f).graphicsLayer {

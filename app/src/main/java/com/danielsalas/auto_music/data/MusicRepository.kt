@@ -6,7 +6,8 @@ import android.net.Uri
 import android.os.Environment
 import android.util.Log
 import com.danielsalas.auto_music.data.local.MusicDao
-import com.danielsalas.auto_music.data.remote.Innertube
+import com.danielsalas.auto_music.data.remote.*
+import com.danielsalas.auto_music.data.remote.YouTubePlaylist
 import com.danielsalas.auto_music.data.remote.YouTubeService
 import com.danielsalas.auto_music.model.Playlist
 import com.danielsalas.auto_music.model.PlaylistSongCrossRef
@@ -36,35 +37,139 @@ class MusicRepository(
 
     suspend fun searchSongs(query: String): List<Song> {
         return try {
-            val response = Innertube.search(query) ?: return emptyList()
-            val songs = mutableListOf<Song>()
-            val contents = response.contents?.tabbedSearchResultsRenderer?.tabs?.firstOrNull()?.tabRenderer?.content?.sectionListRenderer?.contents
-                ?: response.contents?.sectionListRenderer?.contents
-            if (contents == null) return emptyList()
-
-            contents.forEach { section ->
-                val musicShelf = section.musicShelfRenderer ?: section.musicPlaylistShelfRenderer ?: section.musicCarouselShelfRenderer
-                musicShelf?.contents?.forEach { item ->
-                    val renderer = item.musicResponsiveListItemRenderer ?: return@forEach
-                    val videoId = renderer.navigationEndpoint?.watchEndpoint?.videoId ?: renderer.playlistItemData?.videoId
-                        ?: renderer.flexColumns?.getOrNull(0)?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.firstOrNull()?.navigationEndpoint?.watchEndpoint?.videoId
-                    if (videoId == null) return@forEach
-                    
-                    val title = renderer.flexColumns?.getOrNull(0)?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.joinToString("") { it.text ?: "" } ?: "Desconegut"
-                    val artistRuns = renderer.flexColumns?.getOrNull(1)?.musicResponsiveListItemFlexColumnRenderer?.text?.runs
-                    val artist = artistRuns?.firstOrNull()?.text ?: "Artista desconegut"
-                    val album = if (artistRuns != null && artistRuns.size >= 3) artistRuns[2].text else null
-                    val thumb = renderer.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails?.lastOrNull()?.url ?: ""
-                    val lengthText = renderer.lengthText?.runs?.firstOrNull()?.text ?: artistRuns?.lastOrNull()?.text
-                    val durationSeconds = lengthText?.let { parseDuration(it) } ?: 0L
-
-                    songs.add(Song(id = videoId, title = title, artist = artist, album = album, thumbnailUrl = thumb, audioUrl = null, duration = durationSeconds))
-                }
+            Log.d("MusicRepository", "Searching songs for: $query")
+            val response = Innertube.search(query, params = "EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D")
+            val songs = if (response != null) parseSongsFromResponse(response) else mutableListOf()
+            
+            if (songs.isEmpty()) {
+                Log.d("MusicRepository", "Strict search empty, trying general search")
+                val generalResponse = Innertube.search(query, params = null)
+                generalResponse?.let { songs.addAll(parseSongsFromResponse(it)) }
             }
+            
+            Log.d("MusicRepository", "Found ${songs.size} songs")
             songs.distinctBy { it.id }
         } catch (e: Exception) {
-            Log.e("MusicRepository", "Error cerca: ${e.message}")
+            Log.e("MusicRepository", "Error cerca: ${e.message}", e)
             emptyList()
+        }
+    }
+
+    private fun parseSongsFromResponse(response: InnerTubeResponse): MutableList<Song> {
+        val songs = mutableListOf<Song>()
+        val contents = response.contents?.tabbedSearchResultsRenderer?.tabs?.firstOrNull()?.tabRenderer?.content?.sectionListRenderer?.contents
+            ?: response.contents?.sectionListRenderer?.contents
+        
+        contents?.forEach { section ->
+            parseSection(section, songs)
+        }
+        return songs
+    }
+
+    private fun parseSection(section: SectionContent, songs: MutableList<Song>) {
+        section.itemSectionRenderer?.contents?.forEach { subSection ->
+            parseSection(subSection, songs)
+        }
+
+        section.musicCardShelfRenderer?.let { card ->
+            card.contents?.forEach { item ->
+                parseMusicItem(item, songs)
+            }
+        }
+
+        val shelf = section.musicShelfRenderer ?: section.musicPlaylistShelfRenderer ?: section.musicCarouselShelfRenderer ?: section.musicPlaylistShelfContinuation
+        shelf?.contents?.forEach { item ->
+            parseMusicItem(item, songs)
+        }
+
+        section.gridRenderer?.items?.forEach { item ->
+            parseMusicItem(item, songs)
+        }
+    }
+
+    private fun parseMusicItem(item: MusicItem, songs: MutableList<Song>) {
+        val renderer = item.musicResponsiveListItemRenderer ?: return
+        val videoId = renderer.navigationEndpoint?.watchEndpoint?.videoId 
+            ?: renderer.playlistItemData?.videoId
+            ?: renderer.flexColumns?.getOrNull(0)?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.firstNotNullOfOrNull { it.navigationEndpoint?.watchEndpoint?.videoId }
+        
+        if (videoId != null) {
+            val title = renderer.flexColumns?.getOrNull(0)?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.joinToString("") { it.text ?: "" } ?: "Unknown"
+            val subtitleRuns = renderer.flexColumns?.getOrNull(1)?.musicResponsiveListItemFlexColumnRenderer?.text?.runs
+            val artist = subtitleRuns?.firstOrNull()?.text ?: "Unknown"
+            val album = if (subtitleRuns != null && subtitleRuns.size >= 3) subtitleRuns[2].text else null
+            val thumb = renderer.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails?.lastOrNull()?.url ?: ""
+            val lengthText = renderer.lengthText?.runs?.firstOrNull()?.text ?: subtitleRuns?.lastOrNull()?.text
+            val durationSeconds = lengthText?.let { parseDuration(it) } ?: 0L
+
+            songs.add(Song(id = videoId, title = title, artist = artist, album = album, thumbnailUrl = thumb, duration = durationSeconds))
+        }
+    }
+
+    suspend fun searchPlaylists(query: String): List<YouTubePlaylist> {
+        return try {
+            val response = Innertube.search(query, params = "EgeKAQQoAEABagoQAxAEEAoQCRAF") ?: return emptyList()
+            val playlists = mutableListOf<YouTubePlaylist>()
+            val contents = response.contents?.tabbedSearchResultsRenderer?.tabs?.firstOrNull()?.tabRenderer?.content?.sectionListRenderer?.contents
+                ?: response.contents?.sectionListRenderer?.contents
+            
+            contents?.forEach { section ->
+                val shelf = section.musicShelfRenderer ?: section.musicPlaylistShelfRenderer ?: section.musicCarouselShelfRenderer
+                shelf?.contents?.forEach { item ->
+                    val renderer = item.musicResponsiveListItemRenderer ?: return@forEach
+                    val browseId = renderer.navigationEndpoint?.browseEndpoint?.browseId ?: return@forEach
+                    
+                    val title = renderer.flexColumns?.getOrNull(0)?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.joinToString("") { it.text ?: "" } ?: "Llista"
+                    val subtitleRuns = renderer.flexColumns?.getOrNull(1)?.musicResponsiveListItemFlexColumnRenderer?.text?.runs
+                    val author = subtitleRuns?.firstOrNull()?.text ?: "YouTube"
+                    val countText = subtitleRuns?.lastOrNull()?.text ?: "0"
+                    val trackCount = countText.filter { it.isDigit() }.toIntOrNull() ?: 0
+                    val thumb = renderer.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails?.lastOrNull()?.url ?: ""
+
+                    playlists.add(YouTubePlaylist(id = browseId, title = title, author = author, trackCount = trackCount, thumbnailUrl = thumb))
+                }
+            }
+            playlists.distinctBy { it.id }
+        } catch (e: Exception) {
+            Log.e("MusicRepository", "Error cerca llistes: ${e.message}")
+            emptyList()
+        }
+    }
+
+    suspend fun getYouTubePlaylistSongs(playlistId: String): List<Song> {
+        Log.d("MusicRepository", "Fetching songs for playlist: $playlistId")
+        val browseId = if (playlistId.startsWith("PL") && !playlistId.startsWith("VL")) "VL$playlistId" else playlistId
+        
+        val response = Innertube.browse(browseId) ?: return emptyList()
+        val songs = mutableListOf<Song>()
+        
+        response.contents?.let { contents ->
+            contents.twoColumnBrowseResultsRenderer?.secondaryContents?.sectionListRenderer?.contents?.forEach { parseSection(it, songs) }
+            contents.twoColumnBrowseResultsRenderer?.tabs?.forEach { tab ->
+                tab.tabRenderer?.content?.sectionListRenderer?.contents?.forEach { parseSection(it, songs) }
+            }
+            contents.singleColumnBrowseResultsRenderer?.tabs?.forEach { tab ->
+                tab.tabRenderer?.content?.sectionListRenderer?.contents?.forEach { parseSection(it, songs) }
+            }
+            contents.sectionListRenderer?.contents?.forEach { parseSection(it, songs) }
+            contents.tabbedSearchResultsRenderer?.tabs?.firstOrNull()?.tabRenderer?.content?.sectionListRenderer?.contents?.forEach { parseSection(it, songs) }
+        }
+        
+        response.continuationContents?.let { cc ->
+            cc.musicShelfContinuation?.contents?.forEach { parseMusicItem(it, songs) }
+            cc.musicPlaylistShelfContinuation?.contents?.forEach { parseMusicItem(it, songs) }
+            cc.sectionListContinuation?.contents?.forEach { parseSection(it, songs) }
+        }
+        
+        Log.d("MusicRepository", "Found ${songs.size} songs in playlist $playlistId")
+        return songs.distinctBy { it.id }
+    }
+
+    suspend fun importYouTubePlaylist(ytPlaylist: YouTubePlaylist) {
+        val songs = getYouTubePlaylistSongs(ytPlaylist.id)
+        val playlistId = createPlaylist(ytPlaylist.title, isPublic = false)
+        songs.forEach { song ->
+            addSongToPlaylist(song, playlistId)
         }
     }
 
@@ -98,7 +203,6 @@ class MusicRepository(
             val maxPos = musicDao.getMaxPosition(playlistId) ?: -1
             musicDao.insertSongToPlaylist(PlaylistSongCrossRef(playlistId, song.id, maxPos + 1))
         }
-        
         checkAndDownloadPlaylistSongs(playlistId)
     }
 
@@ -138,10 +242,8 @@ class MusicRepository(
     fun downloadSong(song: Song) {
         val sp = context.getSharedPreferences("downloads", Context.MODE_PRIVATE)
         if (sp.contains("pending_${song.id}")) return
-        
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                // Sequential resolution to avoid 403/429
                 val stream = com.danielsalas.auto_music.player.InnertubeResolver.resolveStream(song.id) ?: return@launch
                 executeDownload(song, stream.url, stream.userAgent)
             } catch (e: Exception) { sp.edit().remove("pending_${song.id}").apply() }
@@ -152,20 +254,12 @@ class MusicRepository(
         val sp = context.getSharedPreferences("downloads", Context.MODE_PRIVATE)
         val fileName = "${song.id}.mp3"
         val dir = getDownloadDir()
-        
         val file = File(dir, fileName)
         if (file.exists() && file.length() > 1024) {
             CoroutineScope(Dispatchers.IO).launch { updateSongDownloadStatus(song.id, file.absolutePath) }
             return
         }
-        
-        val request = DownloadManager.Request(Uri.parse(url))
-            .setTitle("Auto Music: ${song.title}")
-            .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, "auto_music/$fileName")
-            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            .addRequestHeader("User-Agent", userAgent)
-            .addRequestHeader("Referer", "https://www.youtube.com/")
-
+        val request = DownloadManager.Request(Uri.parse(url)).setTitle("Auto Music: ${song.title}").setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, "auto_music/$fileName").setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED).addRequestHeader("User-Agent", userAgent).addRequestHeader("Referer", "https://www.youtube.com/")
         val downloadId = (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
         sp.edit().putString(downloadId.toString(), song.id).putBoolean("pending_${song.id}", true).apply()
     }
@@ -173,100 +267,43 @@ class MusicRepository(
     suspend fun cancelAllDownloads() {
         val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
         val sp = context.getSharedPreferences("downloads", Context.MODE_PRIVATE)
-        val allKeys = sp.all.keys
-        val idsToCancel = mutableListOf<Long>()
-        
-        allKeys.forEach { key ->
-            key.toLongOrNull()?.let { idsToCancel.add(it) }
-        }
-        
-        if (idsToCancel.isNotEmpty()) {
-            dm.remove(*idsToCancel.toLongArray())
-        }
+        val idsToCancel = sp.all.keys.mapNotNull { it.toLongOrNull() }
+        if (idsToCancel.isNotEmpty()) dm.remove(*idsToCancel.toLongArray())
         sp.edit().clear().apply()
-        Log.i("MusicRepository", "All downloads cancelled and queue cleared.")
     }
 
     suspend fun performLibraryMaintenance(): MaintenanceSummary = withContext(Dispatchers.IO) {
-        Log.i("Maintenance", "Starting Library Maintenance v2.1.3 (Ultra-Safe)...")
-        val errors = mutableListOf<MaintenanceError>()
-        var cleanedFiles = 0
-        var totalRequeued = 0
-        var restoredSongs = 0
-        
-        val dir = getDownloadDir()
-
-        // 1. Clean Orphaned/Corrupt Files
-        val allSongsInDb = musicDao.getAllSongsList()
-        val validSongIds = allSongsInDb.map { it.id }.toSet()
-        
-        dir.listFiles()?.forEach { file ->
-            if (file.name.endsWith(".mp3")) {
-                val id = file.name.removeSuffix(".mp3")
-                if (id !in validSongIds || file.length() < 1024) { 
-                    file.delete()
-                    cleanedFiles++
-                }
-            }
-        }
-
-        // 2. Scan and repair DB status
-        val sp = context.getSharedPreferences("AutoMusicPrefs", Context.MODE_PRIVATE)
-        val autoDownloadPublic = sp.getBoolean("auto_download_public", true)
-        val autoDownloadPrivate = sp.getBoolean("auto_download_private", true)
-        
-        val playlists = musicDao.getAllPlaylists().first()
-        val uniqueSongs = mutableSetOf<String>()
-
+        val errors = mutableListOf<MaintenanceError>(); var cleanedFiles = 0; var totalRequeued = 0; var restoredSongs = 0
+        val dir = getDownloadDir(); val allSongsInDb = musicDao.getAllSongsList(); val validSongIds = allSongsInDb.map { it.id }.toSet()
+        dir.listFiles()?.forEach { file -> if (file.name.endsWith(".mp3") && (file.name.removeSuffix(".mp3") !in validSongIds || file.length() < 1024)) { file.delete(); cleanedFiles++ } }
+        val sp = context.getSharedPreferences("AutoMusicPrefs", Context.MODE_PRIVATE); val autoDownloadPublic = sp.getBoolean("auto_download_public", true); val autoDownloadPrivate = sp.getBoolean("auto_download_private", true)
+        val playlists = musicDao.getAllPlaylists().first(); val uniqueSongs = mutableSetOf<String>()
         for (playlist in playlists) {
             val shouldDownload = if (playlist.isPublic) autoDownloadPublic else autoDownloadPrivate
             val songsInPlaylist = musicDao.getSongsInPlaylist(playlist.id).first()
-            
             for (song in songsInPlaylist) {
                 if (song.id in uniqueSongs) continue
                 uniqueSongs.add(song.id)
-
                 val file = File(dir, "${song.id}.mp3")
-                if (file.exists() && file.length() > 1024) {
-                    if (!song.isDownloaded) {
-                        musicDao.insertSong(song.copy(isDownloaded = true, audioUrl = file.absolutePath))
-                        restoredSongs++
-                    }
-                } else if (shouldDownload) {
+                if (file.exists() && file.length() > 1024) { if (!song.isDownloaded) { musicDao.insertSong(song.copy(isDownloaded = true, audioUrl = file.absolutePath)); restoredSongs++ } }
+                else if (shouldDownload) {
                     if (song.isDownloaded) musicDao.insertSong(song.copy(isDownloaded = false, audioUrl = null))
-                    // Sequential processing for resolution
-                    try {
-                        val stream = com.danielsalas.auto_music.player.InnertubeResolver.resolveStream(song.id)
-                        if (stream != null) {
-                            executeDownload(song, stream.url, stream.userAgent)
-                            totalRequeued++
-                        } else {
-                            errors.add(MaintenanceError(song.title, "YouTube blocked access (403/Identity)"))
-                        }
-                        delay(500) // Respect YouTube
-                    } catch (e: Exception) {
-                        errors.add(MaintenanceError(song.title, e.message ?: "Network error"))
-                    }
+                    try { val stream = com.danielsalas.auto_music.player.InnertubeResolver.resolveStream(song.id); if (stream != null) { executeDownload(song, stream.url, stream.userAgent); totalRequeued++ } else errors.add(MaintenanceError(song.title, "YouTube blocked access")) } catch (e: Exception) { errors.add(MaintenanceError(song.title, e.message ?: "Network error")) }
+                    delay(500)
                 }
             }
         }
-        
         MaintenanceSummary(cleanedFiles, totalRequeued, restoredSongs, errors)
     }
     
     suspend fun updatePlaylistShuffle(playlistId: Long, shuffle: Boolean) {
         musicDao.updatePlaylistShuffle(playlistId, shuffle)
     }
+
+    suspend fun updatePlaylistNormalization(playlistId: Long, normalized: Boolean) {
+        musicDao.updatePlaylistNormalization(playlistId, normalized)
+    }
 }
 
-data class MaintenanceSummary(
-    val filesCleaned: Int,
-    val songsRequeued: Int,
-    val songsRestored: Int,
-    val errors: List<MaintenanceError>
-)
-
-data class MaintenanceError(
-    val title: String,
-    val reason: String
-)
+data class MaintenanceSummary(val filesCleaned: Int, val songsRequeued: Int, val songsRestored: Int, val errors: List<MaintenanceError>)
+data class MaintenanceError(val title: String, val reason: String)

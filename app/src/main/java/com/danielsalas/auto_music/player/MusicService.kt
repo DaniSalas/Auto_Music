@@ -58,9 +58,6 @@ class MusicService : MediaLibraryService() {
     
     private val softwareEqualizer = CustomEqualizerAudioProcessor()
     private var loudnessEnhancer: LoudnessEnhancer? = null
-    private var equalizer: Equalizer? = null
-    private var presetReverb: PresetReverb? = null
-    private var environmentalReverb: EnvironmentalReverb? = null
     private var currentAudioSessionId: Int = 0
 
     private fun createDataSourceFactory(): androidx.media3.datasource.DataSource.Factory {
@@ -72,26 +69,52 @@ class MusicService : MediaLibraryService() {
         
         val resolvingDataSourceFactory = ResolvingDataSource.Factory(defaultDataSourceFactory) { dataSpec ->
             val uriString = dataSpec.uri.toString()
-            if (uriString.startsWith("file") || uriString.startsWith("content") || uriString.contains("googlevideo.com")) return@Factory dataSpec
+            Log.d("MusicService", "Resolving data source for: $uriString")
             
-            val videoId = dataSpec.key ?: uriString.substringAfter("v=", "").substringBefore("&")
-            if (videoId.isEmpty()) return@Factory dataSpec
+            if (uriString.startsWith("file") || uriString.startsWith("content") || uriString.contains("googlevideo.com")) {
+                return@Factory dataSpec
+            }
             
+            val videoId = when {
+                uriString.startsWith("youtube://") -> uriString.removePrefix("youtube://")
+                uriString.contains("v=") -> uriString.substringAfter("v=").substringBefore("&")
+                uriString.contains("music.youtube.com/watch?v=") -> uriString.substringAfter("v=").substringBefore("&")
+                else -> dataSpec.key ?: ""
+            }
+            
+            if (videoId.isBlank()) {
+                Log.w("MusicService", "Could not extract videoId from $uriString")
+                return@Factory dataSpec
+            }
+            
+            Log.d("MusicService", "Extracted videoId: $videoId")
+
+            // Try local file first
             val localFile = File(getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "auto_music/$videoId.mp3")
-            if (localFile.exists()) return@Factory dataSpec.withUri(Uri.fromFile(localFile))
+            if (localFile.exists() && localFile.length() > 1024) {
+                Log.d("MusicService", "Found local file: ${localFile.absolutePath}")
+                return@Factory dataSpec.withUri(Uri.fromFile(localFile))
+            }
             
+            // Resolve online stream
             val stream = try { 
                 runBlocking(Dispatchers.IO) { 
-                    withTimeoutOrNull(25000) { InnertubeResolver.resolveStream(videoId) } 
+                    withTimeoutOrNull(20000) { InnertubeResolver.resolveStream(videoId) } 
                 } 
-            } catch (e: Exception) { null }
+            } catch (e: Exception) { 
+                Log.e("MusicService", "Stream resolution failed for $videoId: ${e.message}")
+                null 
+            }
             
             if (stream != null) {
+                Log.d("MusicService", "Successfully resolved online stream for $videoId")
                 val headers = dataSpec.httpRequestHeaders.toMutableMap()
                 headers["User-Agent"] = stream.userAgent
                 headers["Referer"] = "https://www.youtube.com/"
                 return@Factory dataSpec.withUri(Uri.parse(stream.url)).withRequestHeaders(headers)
             }
+            
+            Log.e("MusicService", "All resolution attempts failed for $videoId")
             dataSpec
         }
         
@@ -140,14 +163,7 @@ class MusicService : MediaLibraryService() {
             .build()
         
         val renderersFactory = object : DefaultRenderersFactory(this) {
-            @androidx.media3.common.util.UnstableApi
-            override fun buildAudioSink(
-                context: Context,
-                enableFloatOutput: Boolean,
-                enableAudioTrackPlaybackParams: Boolean
-            ): AudioSink {
-                return audioSink
-            }
+            override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioTrackPlaybackParams: Boolean): AudioSink = audioSink
         }
 
         val newPlayer = ExoPlayer.Builder(this, renderersFactory)
@@ -156,9 +172,7 @@ class MusicService : MediaLibraryService() {
             .setHandleAudioBecomingNoisy(true).build()
         
         newPlayer.repeatMode = Player.REPEAT_MODE_ALL
-        
         newPlayer.addListener(object : Player.Listener {
-            @androidx.media3.common.util.UnstableApi
             override fun onAudioSessionIdChanged(audioSessionId: Int) {
                 if (currentAudioSessionId != audioSessionId) {
                     currentAudioSessionId = audioSessionId
@@ -168,18 +182,30 @@ class MusicService : MediaLibraryService() {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 mediaItem?.let { item ->
                     val mId = item.mediaId
+                    if (mId == "RESUME_ROOT" || mId.startsWith("RESUME_PL")) return@let
                     val playlistId = if (mId.contains("|")) mId.substringBefore("|").removePrefix("PL").toLongOrNull() else null
-                    if (playlistId != null) {
-                        serviceScope.launch {
-                            val p = repository.getPlaylistById(playlistId)
-                            applyPlaylistEffects(p)
-                        }
-                    }
                     val songId = if (mId.contains("|")) mId.substringAfter("|") else mId
-                    if (playlistId != null) serviceScope.launch { repository.updatePlaylistPlaybackState(playlistId, songId, 0L) }
+                    if (playlistId != null) {
+                        serviceScope.launch { applyPlaylistEffects(repository.getPlaylistById(playlistId)) }
+                        serviceScope.launch { repository.updatePlaylistPlaybackState(playlistId, songId, 0L) }
+                    }
                 }
             }
         })
+        
+        serviceScope.launch {
+            while (isActive) {
+                delay(5000)
+                if (newPlayer.isPlaying) {
+                    val item = newPlayer.currentMediaItem ?: continue
+                    val mId = item.mediaId
+                    if (mId == "RESUME_ROOT" || mId.startsWith("RESUME_PL")) continue
+                    val playlistId = if (mId.contains("|")) mId.substringBefore("|").removePrefix("PL").toLongOrNull() else null
+                    val songId = if (mId.contains("|")) mId.substringAfter("|") else mId
+                    if (playlistId != null) repository.updatePlaylistPlaybackState(playlistId, songId, newPlayer.currentPosition)
+                }
+            }
+        }
 
         player = newPlayer
         val intent = Intent(this, com.danielsalas.auto_music.MainActivity::class.java)
@@ -191,11 +217,8 @@ class MusicService : MediaLibraryService() {
 
     private fun setupAudioEffects(sessionId: Int) {
         try {
-            loudnessEnhancer?.release(); equalizer?.release(); presetReverb?.release(); environmentalReverb?.release()
+            loudnessEnhancer?.release()
             loudnessEnhancer = LoudnessEnhancer(sessionId).apply { setTargetGain(0); enabled = false }
-            equalizer = Equalizer(1000, sessionId).apply { enabled = true }
-            presetReverb = PresetReverb(1000, sessionId).apply { enabled = false }
-            environmentalReverb = EnvironmentalReverb(1000, sessionId).apply { enabled = false }
             loadGlobalEqualizer()
         } catch (e: Exception) { Log.e("MusicService", "setupAudioEffects error: ${e.message}") }
     }
@@ -203,10 +226,7 @@ class MusicService : MediaLibraryService() {
     private fun applyPlaylistEffects(playlist: com.danielsalas.auto_music.model.Playlist?) {
         val normalize = playlist?.isVolumeNormalized ?: false
         try {
-            loudnessEnhancer?.let { 
-                it.setTargetGain(if (normalize) 2500 else 0)
-                it.enabled = normalize 
-            }
+            loudnessEnhancer?.let { it.setTargetGain(if (normalize) 2500 else 0); it.enabled = normalize }
         } catch (e: Exception) { Log.e("MusicService", "LoudnessEnhancer error: ${e.message}") }
     }
 
@@ -221,26 +241,6 @@ class MusicService : MediaLibraryService() {
     private fun applyEqualizerSettings(isEqEnabled: Boolean, levels: IntArray?, reverbPreset: Int) {
         try {
             softwareEqualizer.updateSettings(isEqEnabled, levels)
-            equalizer?.let { eq ->
-                if (levels != null) {
-                    val numBands = eq.numberOfBands.toInt()
-                    val range = eq.getBandLevelRange()
-                    for (i in 0 until numBands.coerceAtMost(levels.size)) {
-                        val level = levels[i].toShort()
-                        val coercedLevel = level.coerceIn(range[0], range[1])
-                        eq.setBandLevel(i.toShort(), coercedLevel)
-                    }
-                }
-                eq.enabled = false; eq.enabled = isEqEnabled
-            }
-            presetReverb?.enabled = false; environmentalReverb?.enabled = false
-            if (isEqEnabled) {
-                when (reverbPreset) {
-                    1 -> environmentalReverb?.apply { roomLevel = -500; roomHFLevel = -100; decayTime = 300; reflectionsLevel = -800; reflectionsDelay = 15; reverbLevel = 100; reverbDelay = 20; enabled = true }
-                    2 -> presetReverb?.apply { preset = PresetReverb.PRESET_MEDIUMROOM; enabled = true }
-                    3 -> presetReverb?.apply { preset = PresetReverb.PRESET_LARGEHALL; enabled = true }
-                }
-            }
         } catch (e: Exception) { Log.e("MusicService", "applyEqualizerSettings error: ${e.message}") }
     }
 
@@ -251,6 +251,9 @@ class MusicService : MediaLibraryService() {
             val sessionCommands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
                 .add(SessionCommand("ACTION_UPDATE_EQ", Bundle.EMPTY))
                 .add(SessionCommand("ACTION_UPDATE_NORMALIZATION", Bundle.EMPTY))
+                .add(SessionCommand.COMMAND_CODE_LIBRARY_GET_CHILDREN)
+                .add(SessionCommand.COMMAND_CODE_LIBRARY_GET_ITEM)
+                .add(SessionCommand.COMMAND_CODE_LIBRARY_GET_LIBRARY_ROOT)
                 .build()
             return MediaSession.ConnectionResult.accept(sessionCommands, Player.Commands.Builder().addAllCommands().build())
         }
@@ -270,12 +273,28 @@ class MusicService : MediaLibraryService() {
             return super.onCustomCommand(session, controller, customCommand, args)
         }
 
-        @androidx.media3.common.util.UnstableApi
         override fun onSetMediaItems(mediaSession: MediaSession, controller: MediaSession.ControllerInfo, mediaItems: MutableList<MediaItem>, startIndex: Int, startPositionMs: Long): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
             val future = SettableFuture.create<MediaSession.MediaItemsWithStartPosition>()
             serviceScope.launch {
                 val firstItem = mediaItems.firstOrNull() ?: run { future.set(MediaSession.MediaItemsWithStartPosition(mediaItems, startIndex, startPositionMs)); return@launch }
                 val targetMId = firstItem.mediaId
+                
+                if (targetMId == "RESUME_ROOT" || targetMId.startsWith("RESUME_PL")) {
+                    val playlistId = if (targetMId == "RESUME_ROOT") repository.allPlaylists.first().find { it.lastPlayedSongId != null }?.id else targetMId.removePrefix("RESUME_PL").toLongOrNull()
+                    if (playlistId != null) {
+                        val dbPlaylist = repository.getPlaylistById(playlistId)
+                        val songs = repository.getSongsInPlaylist(playlistId).first()
+                        val expandedItems = songs.map { createMediaItem(it, playlistId) }
+                        var finalIndex = 0; var finalPos = 0L
+                        if (dbPlaylist?.lastPlayedSongId != null) {
+                            val lastIdx = expandedItems.indexOfFirst { it.mediaId.substringAfter("|") == dbPlaylist.lastPlayedSongId }
+                            if (lastIdx != -1) { finalIndex = lastIdx; finalPos = dbPlaylist.lastPlayedPositionMs }
+                        }
+                        future.set(MediaSession.MediaItemsWithStartPosition(expandedItems, finalIndex, finalPos))
+                    } else future.set(MediaSession.MediaItemsWithStartPosition(mediaItems, startIndex, startPositionMs))
+                    return@launch
+                }
+
                 val playlistId = if (targetMId.contains("|")) targetMId.substringBefore("|").removePrefix("PL").toLongOrNull() else firstItem.mediaMetadata.extras?.getString("playlistId")?.toLongOrNull()
                 if (playlistId != null) {
                     val dbPlaylist = repository.getPlaylistById(playlistId)
@@ -287,7 +306,7 @@ class MusicService : MediaLibraryService() {
                 } else {
                     val updated = mediaItems.map { 
                         val songId = if (it.mediaId.contains("|")) it.mediaId.substringAfter("|") else it.mediaId
-                        repository.getSongById(songId)?.let { song -> createMediaItem(song, null) } ?: it.buildUpon().setUri("https://music.youtube.com/watch?v=$songId").setMimeType("audio/mpeg").build()
+                        repository.getSongById(songId)?.let { song -> createMediaItem(song, null) } ?: it.buildUpon().setUri("youtube://$songId").setMimeType("audio/mpeg").build()
                     }
                     future.set(MediaSession.MediaItemsWithStartPosition(updated, startIndex, startPositionMs))
                 }
@@ -297,14 +316,15 @@ class MusicService : MediaLibraryService() {
 
         private fun createMediaItem(song: com.danielsalas.auto_music.model.Song, playlistId: Long?): MediaItem {
             val isLocal = song.isDownloaded && song.audioUrl != null && File(song.audioUrl).exists()
-            val uri = if (isLocal) Uri.fromFile(File(song.audioUrl)).toString() else "https://music.youtube.com/watch?v=${song.id}"
+            val uri = if (isLocal) Uri.fromFile(File(song.audioUrl)).toString() else "youtube://${song.id}"
             val metadata = MediaMetadata.Builder().setTitle(song.title).setArtist(song.artist).setArtworkUri(song.thumbnailUrl.toUri()).setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
+                .setIsBrowsable(false).setIsPlayable(true)
                 .setExtras(Bundle().apply { if (playlistId != null) putString("playlistId", playlistId.toString()); putLong("android.media.metadata.DURATION", song.duration * 1000L); putString("album", song.album) }).build()
             return MediaItem.Builder().setMediaId(if (playlistId != null) "PL$playlistId|${song.id}" else song.id).setUri(uri).setMimeType("audio/mpeg").setMediaMetadata(metadata).build()
         }
 
         override fun onGetLibraryRoot(session: MediaLibrarySession, browser: MediaSession.ControllerInfo, params: LibraryParams?): ListenableFuture<LibraryResult<MediaItem>> {
-            val meta = MediaMetadata.Builder().setTitle("Auto Music").setIsBrowsable(true).setIsPlayable(false).setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED).build()
+            val meta = MediaMetadata.Builder().setTitle("Auto Music").setIsBrowsable(true).setIsPlayable(false).setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED).setExtras(Bundle().apply { putInt("android.media.browse.CONTENT_STYLE_BROWSABLE_HINT", 1); putInt("android.media.browse.CONTENT_STYLE_PLAYABLE_HINT", 1) }).build()
             return Futures.immediateFuture(LibraryResult.ofItem(MediaItem.Builder().setMediaId("ROOT").setMediaMetadata(meta).build(), params))
         }
 
@@ -314,9 +334,13 @@ class MusicService : MediaLibraryService() {
                 try {
                     val items = mutableListOf<MediaItem>()
                     if (parentId == "ROOT") {
-                        repository.allPlaylists.first().forEach { p -> items.add(MediaItem.Builder().setMediaId("PLAYLIST_${p.id}").setMediaMetadata(MediaMetadata.Builder().setTitle(p.name).setIsBrowsable(true).setIsPlayable(false).setMediaType(MediaMetadata.MEDIA_TYPE_PLAYLIST).build()).build()) }
+                        val playlists = repository.allPlaylists.first()
+                        if (playlists.any { it.lastPlayedSongId != null }) items.add(MediaItem.Builder().setMediaId("RESUME_ROOT").setMediaMetadata(MediaMetadata.Builder().setTitle("▶ Resume").setIsBrowsable(false).setIsPlayable(true).setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC).build()).build())
+                        playlists.forEach { p -> items.add(MediaItem.Builder().setMediaId("PLAYLIST_${p.id}").setMediaMetadata(MediaMetadata.Builder().setTitle(p.name).setIsBrowsable(true).setIsPlayable(false).setMediaType(MediaMetadata.MEDIA_TYPE_PLAYLIST).build()).build()) }
                     } else if (parentId.startsWith("PLAYLIST_")) {
                         val pid = parentId.removePrefix("PLAYLIST_").toLong()
+                        val p = repository.getPlaylistById(pid)
+                        if (p?.lastPlayedSongId != null) items.add(MediaItem.Builder().setMediaId("RESUME_PL$pid").setMediaMetadata(MediaMetadata.Builder().setTitle("▶ Resume playlist").setIsBrowsable(false).setIsPlayable(true).setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC).build()).build())
                         repository.getSongsInPlaylist(pid).first().forEach { s -> items.add(createMediaItem(s, pid)) }
                     }
                     future.set(LibraryResult.ofItemList(ImmutableList.copyOf(items), params))
@@ -328,7 +352,7 @@ class MusicService : MediaLibraryService() {
 
     override fun onDestroy() {
         unregisterReceiver(downloadReceiver); mediaSession?.release(); player?.release(); serviceJob.cancel()
-        loudnessEnhancer?.release(); equalizer?.release(); presetReverb?.release(); environmentalReverb?.release()
+        loudnessEnhancer?.release()
         super.onDestroy()
     }
 }

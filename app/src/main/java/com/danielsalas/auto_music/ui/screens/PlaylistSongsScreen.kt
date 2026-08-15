@@ -126,19 +126,29 @@ fun PlaylistSongsScreen(
         topBar = {
             Surface(tonalElevation = 4.dp, shadowElevation = 4.dp) {
                 Column(modifier = Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 8.dp, vertical = 4.dp)) {
-                    // Line 1: Back + Name
+                    // Line 1 & 2: Back + [Name & Stats] + Delete
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         IconButton(onClick = { if (isSelectionMode) selectedSongs.clear() else onBack() }) {
                             Icon(if (isSelectionMode) Icons.Default.Close else Icons.AutoMirrored.Filled.ArrowBack, null)
                         }
-                        Text(
-                            text = if (isSelectionMode) "${selectedSongs.size} ${strings.selectedItems}" else playlist.name,
-                            style = MaterialTheme.typography.headlineSmall,
-                            fontSize = if (playlist.name.length > 20) 18.sp else 24.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f)
-                        )
+                        
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = if (isSelectionMode) "${selectedSongs.size} ${strings.selectedItems}" else playlist.name,
+                                style = MaterialTheme.typography.headlineSmall,
+                                fontSize = if (playlist.name.length > 20) 18.sp else 24.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            if (!isSelectionMode) {
+                                Text(
+                                    text = "${stats.first} ${strings.songsCountLabel} • ${stats.second}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.secondary
+                                )
+                            }
+                        }
+                        
                         if (isSelectionMode) {
                             IconButton(onClick = { selectedSongs.forEach { viewModel.removeSongFromPlaylist(it, playlist) }; selectedSongs.clear() }) {
                                 Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error)
@@ -147,14 +157,6 @@ fun PlaylistSongsScreen(
                     }
                     
                     if (!isSelectionMode) {
-                        // Line 2: Stats
-                        Text(
-                            text = "${stats.first} ${strings.songsCountLabel} • ${stats.second}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.secondary,
-                            modifier = Modifier.padding(start = 48.dp)
-                        )
-                        
                         // Line 3: Function Icons
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
                             IconButton(onClick = { isNormalized = !isNormalized; viewModel.updatePlaylistNormalization(playlist, isNormalized) }) { 

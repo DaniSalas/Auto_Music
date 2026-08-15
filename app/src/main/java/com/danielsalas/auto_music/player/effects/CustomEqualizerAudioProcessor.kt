@@ -12,14 +12,17 @@ class CustomEqualizerAudioProcessor : AudioProcessor {
     private var channelCount = 0
     private var encoding = C.ENCODING_INVALID
     private var isActive = false
+    
+    @Volatile
     private var eqEnabled = false
+    
+    @Volatile
     private var filters: List<BiquadFilter> = emptyList()
+    
     private var outputBuffer: ByteBuffer = AudioProcessor.EMPTY_BUFFER
     private var inputEnded = false
-    
     private var pendingLevels: IntArray? = null
 
-    @Synchronized
     fun updateSettings(enabled: Boolean, levels: IntArray?) {
         eqEnabled = enabled
         if (sampleRate == 0) {
@@ -35,7 +38,8 @@ class CustomEqualizerAudioProcessor : AudioProcessor {
         val newList = mutableListOf<BiquadFilter>()
         for (i in levels.indices) {
             if (i < frequencies.size) {
-                newList.add(BiquadFilter(sampleRate, frequencies[i], levels[i].toDouble() / 100.0))
+                // levels[i] is 0..15, we use it directly as dB gain
+                newList.add(BiquadFilter(sampleRate, frequencies[i], levels[i].toDouble()))
             }
         }
         filters = newList
@@ -48,7 +52,7 @@ class CustomEqualizerAudioProcessor : AudioProcessor {
         
         pendingLevels?.let { createFilters(it); pendingLevels = null }
 
-        if (encoding != C.ENCODING_PCM_16BIT || channelCount > 2) {
+        if (encoding != C.ENCODING_PCM_16BIT || channelCount > 2 || channelCount <= 0) {
             isActive = false
             return AudioProcessor.AudioFormat.NOT_SET
         }
@@ -59,9 +63,10 @@ class CustomEqualizerAudioProcessor : AudioProcessor {
     override fun isActive(): Boolean = isActive
 
     override fun queueInput(inputBuffer: ByteBuffer) {
+        val rem = inputBuffer.remaining()
+        if (rem == 0) return
+
         if (!eqEnabled || filters.isEmpty()) {
-            val rem = inputBuffer.remaining()
-            if (rem == 0) return
             if (outputBuffer.capacity() < rem) {
                 outputBuffer = ByteBuffer.allocateDirect(rem).order(ByteOrder.nativeOrder())
             } else outputBuffer.clear()
@@ -70,25 +75,25 @@ class CustomEqualizerAudioProcessor : AudioProcessor {
             return
         }
 
-        val inputSize = inputBuffer.remaining()
-        if (inputSize == 0) return
-
-        if (outputBuffer.capacity() < inputSize) {
-            outputBuffer = ByteBuffer.allocateDirect(inputSize).order(ByteOrder.nativeOrder())
+        if (outputBuffer.capacity() < rem) {
+            outputBuffer = ByteBuffer.allocateDirect(rem).order(ByteOrder.nativeOrder())
         } else outputBuffer.clear()
 
-        val sampleCount = inputSize / 2
+        // Local reference to avoid concurrent modification issues during loop
+        val currentFilters = filters
+        val sampleCount = rem / 2
+        
         repeat(sampleCount / channelCount) {
             if (channelCount == 1) {
                 val s = inputBuffer.getShort().toDouble() / 32768.0
                 var p = s
-                for (f in filters) p = f.processSample(p)
+                for (f in currentFilters) p = f.processSample(p)
                 outputBuffer.putShort((p * 32768.0).coerceIn(-32768.0, 32767.0).toInt().toShort())
             } else {
                 val sL = inputBuffer.getShort().toDouble() / 32768.0
                 val sR = inputBuffer.getShort().toDouble() / 32768.0
                 var pL = sL; var pR = sR
-                for (f in filters) {
+                for (f in currentFilters) {
                     val res = f.processStereo(pL, pR)
                     pL = res.first; pR = res.second
                 }
@@ -104,7 +109,7 @@ class CustomEqualizerAudioProcessor : AudioProcessor {
     }
 
     override fun isEnded(): Boolean = inputEnded && outputBuffer.remaining() == 0
-    override fun flush() { outputBuffer = AudioProcessor.EMPTY_BUFFER; inputEnded = false; filters.forEach { it.reset() } }
-    override fun reset() { flush(); sampleRate = 0; channelCount = 0; isActive = false }
+    override fun flush() { outputBuffer = AudioProcessor.EMPTY_BUFFER; inputEnded = false }
+    override fun reset() { flush(); sampleRate = 0; channelCount = 0; isActive = false; filters = emptyList() }
     override fun queueEndOfStream() { inputEnded = true }
 }

@@ -31,7 +31,7 @@ object InnertubeConstants {
 }
 
 object Innertube {
-    private val json = Json { 
+    val json = Json { 
         ignoreUnknownKeys = true 
         explicitNulls = false 
         encodeDefaults = true 
@@ -167,6 +167,11 @@ object Innertube {
                 header("X-Goog-Api-Key", clientType.apiKey)
                 visitorData?.let { header("X-Goog-Visitor-Id", it) }
                 
+                // Essential headers mimicking real client apps to bypass bot / IP restrictions
+                header("X-Forwarded-For", "125.6.142.1")
+                header("Accept-Language", "en-US,en;q=0.9")
+                header("Origin", baseUrl)
+                
                 if (clientType.isMusic) {
                     header("X-Origin", InnertubeConstants.YOUTUBE_MUSIC_URL)
                     header(HttpHeaders.Referrer, "${InnertubeConstants.YOUTUBE_MUSIC_URL}/")
@@ -181,8 +186,12 @@ object Innertube {
                 parameter("prettyPrint", "false")
                 setBody(body)
             }
-            if (response.status.value !in 200..299) return null
-            json.decodeFromString<PlayerResponse>(response.bodyAsText())
+            if (response.status.value !in 200..299) {
+                Log.w("Innertube", "Player error status ${response.status.value} for client ${clientType.clientName}")
+                return null
+            }
+            val resText = response.bodyAsText()
+            json.decodeFromString<PlayerResponse>(resText)
         } catch (e: Exception) { 
             Log.e("Innertube", "Player error for $videoId: ${e.message}")
             null 

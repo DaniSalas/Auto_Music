@@ -300,9 +300,16 @@ fun playSong(song: Song, controller: MediaController?, playlistId: Long?) {
             .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC).setIsBrowsable(false).setIsPlayable(true)
             .build()
         val mediaId = if (playlistId != null) "PL$playlistId|${song.id}" else song.id
-        // Pattern similar to kreate_imp for identifying YouTube streams
+        
+        // Ensure URI uses youtube:// scheme if it's not a local file or direct URL, so MusicService resolves it via Innertube
+        val uri = if (song.id.startsWith("http://") || song.id.startsWith("https://") || song.id.startsWith("file://") || song.id.startsWith("content://")) {
+            android.net.Uri.parse(song.id)
+        } else {
+            android.net.Uri.parse("youtube://${song.id}")
+        }
+
         val item = MediaItem.Builder().setMediaId(mediaId).setMediaMetadata(metadata)
-            .setUri("youtube://${song.id}").setMimeType("audio/mpeg").build()
+            .setUri(uri).setMimeType("audio/mpeg").build()
         c.setMediaItem(item)
         c.prepare()
         c.play()

@@ -1,12 +1,36 @@
 package com.danielsalas.auto_music.player
 
-import com.danielsalas.auto_music.data.remote.Innertube
-import com.danielsalas.auto_music.data.remote.model.YouTubeClient
 import android.util.Log
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.okhttp.OkHttp
+import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.client.request.get
+import io.ktor.client.request.header
+import io.ktor.client.request.post
+import io.ktor.client.request.setBody
+import io.ktor.client.statement.bodyAsText
+import io.ktor.serialization.kotlinx.json.json
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 object InnertubeResolver {
     private const val TAG = "InnertubeResolver"
     private val cachedUrls = mutableMapOf<String, Pair<ResolvedStream, Long>>()
+
+    private val httpClient = HttpClient(OkHttp) {
+        install(ContentNegotiation) {
+            json(Json { ignoreUnknownKeys = true })
+        }
+        engine {
+            config {
+                followRedirects(true)
+                followSslRedirects(true)
+            }
+        }
+    }
 
     data class ResolvedStream(
         val url: String,
@@ -18,71 +42,85 @@ object InnertubeResolver {
             if (System.currentTimeMillis() < expiry) return stream
         }
 
-        // F-Droid compliant & Robust resolution (Rotating identities)
-        val clients = listOf(
-            YouTubeClient.ANDROID_VR,        // Usually gives unthrottled direct links
-            YouTubeClient.ANDROID_TESTSUITE, // Highly stable
-            YouTubeClient.TVHTML5_EMBEDDED,
-            YouTubeClient.IOS
-        )
-
-        for (client in clients) {
-            Log.d(TAG, "Resolving $videoId using ${client.clientName}...")
-            val response = try { 
-                Innertube.player(videoId, client) 
-            } catch (e: Exception) { null }
-
-            if (response?.playabilityStatus?.status == "OK") {
-                val url = extractUrl(response)
-                if (url != null) {
-                    val stream = ResolvedStream(url, client.userAgent)
-                    val expiresIn = response.streamingData?.expiresInSeconds?.toLong() ?: 21600L
-                    cachedUrls[videoId] = stream to (System.currentTimeMillis() + (expiresIn * 1000) - 60000)
-                    Log.i(TAG, "✅ SUCCESS: $videoId resolved with ${client.clientName}")
-                    return stream
+        // 1. Direct Web Scraping of YouTube Watch Page (ytInitialPlayerResponse JSON extraction)
+        try {
+            Log.d(TAG, "Attempting direct YouTube watch page extraction for $videoId")
+            val watchRes = httpClient.get("https://www.youtube.com/watch?v=$videoId") {
+                header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.3")
+                header("Accept-Language", "en-US,en;q=0.9")
+                header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+            }
+            if (watchRes.status.value in 200..299) {
+                val html = watchRes.bodyAsText()
+                val marker = "ytInitialPlayerResponse = "
+                val idx = html.indexOf(marker)
+                if (idx != -1) {
+                    val endIdx = html.indexOf(";</script>", idx)
+                    if (endIdx != -1) {
+                        val playerJsonStr = html.substring(idx + marker.length, endIdx)
+                        val playerJson = Json.parseToJsonElement(playerJsonStr) as? JsonObject
+                        val streamingData = playerJson?.get("streamingData") as? JsonObject
+                        
+                        val formats = (streamingData?.get("adaptiveFormats") as? JsonArray) 
+                            ?: (streamingData?.get("formats") as? JsonArray)
+                        
+                        if (formats != null) {
+                            for (formatEl in formats) {
+                                val fmt = formatEl.jsonObject
+                                val type = fmt["type"]?.jsonPrimitive?.content ?: ""
+                                val itag = fmt["itag"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0
+                                val url = fmt["url"]?.jsonPrimitive?.content
+                                
+                                if (!url.isNullOrBlank() && (itag == 140 || type.contains("audio"))) {
+                                    val resolved = ResolvedStream(url, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                                    cachedUrls[videoId] = resolved to (System.currentTimeMillis() + 21600000L)
+                                    Log.i(TAG, "✅ SUCCESS: Resolved $videoId via direct web scraping (itag $itag)")
+                                    return resolved
+                                }
+                            }
+                        }
+                    }
                 }
-            } else {
-                Log.w(TAG, "❌ FAILED: ${client.clientName} for $videoId. Status: ${response?.playabilityStatus?.status}")
             }
+        } catch (e: Exception) {
+            Log.w(TAG, "Direct web scraping failed for $videoId: ${e.message}")
         }
-        return null
-    }
 
-    private fun extractUrl(response: com.danielsalas.auto_music.data.remote.model.PlayerResponse?): String? {
-        val streamingData = response?.streamingData ?: return null
-        val formats = (streamingData.adaptiveFormats ?: emptyList()) + (streamingData.formats ?: emptyList())
-        
-        // Priority to audio-only formats (itag 140 is M4A 128kbps, very stable)
-        val audioFormats = formats.filter { it.isAudio }
-        
-        // Try to find formats without cipher first
-        val bestFormat = audioFormats.find { it.itag == 140 && it.url != null }
-            ?: audioFormats.find { it.url != null }
-            ?: formats.find { it.url != null }
-            
-        if (bestFormat?.url != null) return bestFormat.url
-
-        // Fallback for encrypted formats (some clients might require it)
-        val cipherFormat = audioFormats.find { it.signatureCipher != null } ?: formats.find { it.signatureCipher != null }
-        if (cipherFormat?.signatureCipher != null) {
-            return decodeSignatureCipher(cipherFormat.signatureCipher)
-        }
-        
-        return null
-    }
-
-    private fun decodeSignatureCipher(cipher: String): String? {
-        return try {
-            val params = cipher.split("&").associate { 
-                val parts = it.split("=")
-                if (parts.size >= 2) java.net.URLDecoder.decode(parts[0], "UTF-8") to java.net.URLDecoder.decode(parts[1], "UTF-8")
-                else "" to ""
+        // 2. Secondary Strategy: Innertube Player POST Endpoint with Web Remix client
+        try {
+            Log.d(TAG, "Attempting Innertube Player API for $videoId")
+            val playerRes = httpClient.post("https://www.youtube.com/youtubei/v1/player?key=AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w") {
+                header("Content-Type", "application/json")
+                header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.3")
+                header("X-Forwarded-For", "190.12.34.56")
+                setBody("{\"context\":{\"client\":{\"clientName\":\"WEB_REMIX\",\"clientVersion\":\"1.20260213.01.00\",\"hl\":\"en\",\"gl\":\"US\"}},\"videoId\":\"$videoId\"}")
             }
-            val baseUrl = params["url"] ?: return null
-            val signature = params["s"] ?: return baseUrl
-            val sp = params["sp"] ?: "sig"
-            val connector = if (baseUrl.contains("?")) "&" else "?"
-            "$baseUrl$connector$sp=$signature"
-        } catch (e: Exception) { null }
+            if (playerRes.status.value in 200..299) {
+                val playerJson = Json.parseToJsonElement(playerRes.bodyAsText()) as? JsonObject
+                val streamingData = playerJson?.get("streamingData") as? JsonObject
+                val formats = (streamingData?.get("adaptiveFormats") as? JsonArray) 
+                    ?: (streamingData?.get("formats") as? JsonArray)
+                if (formats != null) {
+                    for (formatEl in formats) {
+                        val fmt = formatEl.jsonObject
+                        val type = fmt["type"]?.jsonPrimitive?.content ?: ""
+                        val itag = fmt["itag"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0
+                        val url = fmt["url"]?.jsonPrimitive?.content
+                        
+                        if (!url.isNullOrBlank() && (itag == 140 || type.contains("audio"))) {
+                            val resolved = ResolvedStream(url, "Mozilla/5.0")
+                            cachedUrls[videoId] = resolved to (System.currentTimeMillis() + 21600000L)
+                            Log.i(TAG, "✅ SUCCESS: Resolved $videoId via Innertube Player API")
+                            return resolved
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Innertube Player API failed for $videoId: ${e.message}")
+        }
+
+        Log.e(TAG, "❌ All verification and resolution strategies failed for $videoId")
+        return null
     }
 }

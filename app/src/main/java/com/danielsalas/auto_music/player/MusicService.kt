@@ -226,7 +226,14 @@ class MusicService : MediaLibraryService() {
     private fun applyPlaylistEffects(playlist: com.danielsalas.auto_music.model.Playlist?) {
         val normalize = playlist?.isVolumeNormalized ?: false
         try {
-            loudnessEnhancer?.let { it.setTargetGain(if (normalize) 2500 else 0); it.enabled = normalize }
+            loudnessEnhancer?.let { 
+                // 2500 mB = +25 dB (too aggressive and might clip/distort or fail on some decoders). 
+                // Standard ReplayGain / Loudness normalization target: +6dB to +12dB (600 to 1200 mB) or automatic boost.
+                // Let's use 1000 mB (+10 dB) or 1200 mB for balanced perceived loudness normalization.
+                it.setTargetGain(if (normalize) 1200 else 0)
+                it.enabled = normalize
+                Log.d("MusicService", "Playlist normalization applied: $normalize (targetGain: ${if (normalize) 1200 else 0})")
+            }
         } catch (e: Exception) { Log.e("MusicService", "LoudnessEnhancer error: ${e.message}") }
     }
 

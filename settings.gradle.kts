@@ -24,3 +24,9 @@ dependencyResolutionManagement {
 
 rootProject.name = "Auto_Music"
 include(":app")
+
+gradle.projectsEvaluated {
+    val userHome = System.getProperty("user.home")
+    System.setProperty("ANDROID_USER_HOME", "$userHome\\.android")
+    System.setProperty("ANDROID_PREFS_ROOT", "$userHome\\.android")
+}

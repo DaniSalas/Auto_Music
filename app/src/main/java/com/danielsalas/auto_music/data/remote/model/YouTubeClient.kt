@@ -62,41 +62,43 @@ data class YouTubeClient(
 
         val ANDROID_MUSIC = YouTubeClient(
             clientName = "ANDROID_MUSIC",
-            clientVersion = "7.01.52",
-            clientId = "21",
-            apiKey = "AIzaSyAOghZGza2MQSZkY_zfZ370N-PUdXEo8AI",
-            userAgent = "com.google.android.apps.youtube.music/7.01.52 (Linux; U; Android 14; en_US; Pixel 7 Pro; Build/AP2A.240705.004) [INFO_AND_TRACKING]",
+            clientVersion = "6.41.52",
+            clientId = "3",
+            apiKey = KEY_ANDROID,
+            userAgent = "com.google.android.apps.youtube.music/6.41.52 (Linux; U; Android 14; 23117RK66C) Build/UKQ1.230904.001",
             useSignatureTimestamp = true,
             isMusic = true
         )
 
         val IOS = YouTubeClient(
             clientName = "IOS",
-            clientVersion = "21.03.1",
+            clientVersion = "19.29.1",
             clientId = "5",
             apiKey = KEY_IOS,
-            userAgent = "com.google.ios.youtube/21.03.1 (iPhone16,2; U; CPU iOS 18_2 like Mac OS X;)",
+            userAgent = "com.google.ios.youtube/19.29.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X)",
             useSignatureTimestamp = true
         )
 
         val WEB_REMIX = YouTubeClient(
             clientName = "WEB_REMIX",
-            clientVersion = "1.20260213.01.00",
+            clientVersion = "1.20240505.01.00",
             clientId = "67",
             apiKey = KEY_WEB_REMIX,
-            userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.3",
+            userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
             useSignatureTimestamp = true,
             isMusic = true
         )
 
-        val TVHTML5_EMBEDDED = YouTubeClient(
+        val EMBEDDED = YouTubeClient(
             clientName = "TVHTML5_SIMPLY_EMBEDDED_PLAYER",
             clientVersion = "2.0",
             clientId = "85",
-            apiKey = "AIzaSyDCU8hByM-4DrUqRUYnGn-3llEO78bcxq8",
-            userAgent = "Mozilla/5.0 (PlayStation; PlayStation 4/12.02) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Safari/605.1.15",
-            useSignatureTimestamp = true,
+            apiKey = KEY_ANDROID,
+            userAgent = "Mozilla/5.0 (SMART-TV; LINUX; Tizen 6.0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/6.0 TV Safari/605.1.15",
+            useSignatureTimestamp = false,
             isEmbedded = true
         )
+
+        val TVHTML5_EMBEDDED = EMBEDDED
     }
 }

@@ -52,8 +52,8 @@ object Innertube {
         }
     }
 
-    var visitorData: String? = null
-    private const val DEFAULT_STS = 20492
+    var visitorData: String? = "Cg0KC05nS1p5bExfbmtFNBICCAEqAggB"
+
 
     suspend fun fetchVisitorData() {
         try {
@@ -91,7 +91,7 @@ object Innertube {
                 header("Accept-Language", "en-US,en;q=0.9")
                 header("X-Goog-Api-Format-Version", "1")
                 header("X-YouTube-Client-Name", "67")
-                header("X-YouTube-Client-Version", "1.20250416.01.00")
+                header("X-YouTube-Client-Version", "1.20240821.01.00")
                 header("X-Goog-Api-Key", "AIzaSyDyT5W0Jh49F30Pqqtyfdf7pDLFKLJoAnw")
                 header("X-Origin", InnertubeConstants.YOUTUBE_MUSIC_URL)
                 header(HttpHeaders.Referrer, "${InnertubeConstants.YOUTUBE_MUSIC_URL}/")
@@ -126,7 +126,7 @@ object Innertube {
                 header("Accept-Language", "en-US,en;q=0.9")
                 header("X-Goog-Api-Format-Version", "1")
                 header("X-YouTube-Client-Name", "67")
-                header("X-YouTube-Client-Version", "1.20250416.01.00")
+                header("X-YouTube-Client-Version", "1.20240821.01.00")
                 header("X-Goog-Api-Key", "AIzaSyDyT5W0Jh49F30Pqqtyfdf7pDLFKLJoAnw")
                 header("X-Origin", InnertubeConstants.YOUTUBE_MUSIC_URL)
                 header(HttpHeaders.Referrer, "${InnertubeConstants.YOUTUBE_MUSIC_URL}/")
@@ -145,17 +145,15 @@ object Innertube {
     }
 
     suspend fun player(videoId: String, clientType: YouTubeClient): PlayerResponse? {
-        if (visitorData == null) fetchVisitorData()
+        if (visitorData == null) visitorData = "Cg0KC05nS1p5bExfbmtFNBICCAEqAggB"
         return try {
             val context = clientType.toContext(visitorData)
             val body = PlayerBody(
                 context = context,
                 videoId = videoId,
-                playbackContext = if (clientType.useSignatureTimestamp) {
-                    PlayerBody.PlaybackContext(
-                        PlayerBody.PlaybackContext.ContentPlaybackContext(signatureTimestamp = DEFAULT_STS)
-                    )
-                } else null
+                playbackContext = PlayerBody.PlaybackContext(
+                    PlayerBody.PlaybackContext.ContentPlaybackContext(signatureTimestamp = 20688)
+                )
             )
             
             val baseUrl = if (clientType.isMusic) InnertubeConstants.YOUTUBE_MUSIC_URL else InnertubeConstants.YOUTUBE_URL
@@ -167,8 +165,7 @@ object Innertube {
                 header("X-Goog-Api-Key", clientType.apiKey)
                 visitorData?.let { header("X-Goog-Visitor-Id", it) }
                 
-                // Essential headers mimicking real client apps to bypass bot / IP restrictions
-                header("X-Forwarded-For", "125.6.142.1")
+                // Common headers for consistent resolution
                 header("Accept-Language", "en-US,en;q=0.9")
                 header("Origin", baseUrl)
                 

@@ -99,23 +99,55 @@ class MusicService : MediaLibraryService() {
             // Resolve online stream
             val stream = try { 
                 runBlocking(Dispatchers.IO) { 
-                    withTimeoutOrNull(20000) { InnertubeResolver.resolveStream(videoId) } 
+                    withTimeoutOrNull(30000) { InnertubeResolver.resolveStream(videoId) } 
                 } 
             } catch (e: Exception) { 
                 Log.e("MusicService", "Stream resolution failed for $videoId: ${e.message}")
                 null 
             }
             
-            if (stream != null) {
-                Log.d("MusicService", "Successfully resolved online stream for $videoId")
+            if (stream != null && stream.url.isNotEmpty()) {
+                Log.d("MusicService", "Resolved stream: ${stream.url}")
                 val headers = dataSpec.httpRequestHeaders.toMutableMap()
                 headers["User-Agent"] = stream.userAgent
-                headers["Referer"] = "https://www.youtube.com/"
+                
+                if (!stream.url.contains("googlevideo.com")) {
+                    headers.remove("Referer")
+                    headers.remove("Origin")
+                    headers.remove("X-YouTube-Client-Name")
+                    headers.remove("X-YouTube-Client-Version")
+                } else {
+                    headers["Referer"] = "https://www.youtube.com/"
+                    headers["Origin"] = "https://www.youtube.com"
+                }
+                
                 return@Factory dataSpec.withUri(Uri.parse(stream.url)).withRequestHeaders(headers)
             }
             
-            Log.e("MusicService", "All resolution attempts failed for $videoId")
-            dataSpec
+            val errorMsg = stream?.status ?: "Unknown resolution error"
+            Log.e("MusicService", "Resolution failed: $errorMsg")
+            
+            // Notify UI
+            serviceScope.launch(Dispatchers.Main) {
+                player?.let { p ->
+                    p.currentMediaItem?.let { item ->
+                        val newMetadata = item.mediaMetadata.buildUpon()
+                            .setExtras(Bundle().apply { 
+                                item.mediaMetadata.extras?.let { putAll(it) }
+                                putString("playback_error", errorMsg) 
+                            })
+                            .build()
+                        // Since we can't easily update metadata of current item without reset, 
+                        // we rely on the error message being shown in the player UI via a custom broadcast.
+                        mediaSession?.broadcastCustomCommand(
+                            SessionCommand("PLAYBACK_ERROR", Bundle.EMPTY),
+                            Bundle().apply { putString("error", errorMsg) }
+                        )
+                    }
+                }
+            }
+            
+            dataSpec.withUri(Uri.parse("error://resolution_failed?msg=${Uri.encode(errorMsg)}"))
         }
         
         return CacheDataSource.Factory()

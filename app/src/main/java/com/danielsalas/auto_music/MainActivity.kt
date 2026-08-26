@@ -41,11 +41,15 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModelProvider
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionResult
 import androidx.media3.session.SessionToken
+import com.google.common.util.concurrent.ListenableFuture
+import com.google.common.util.concurrent.Futures
 import coil.compose.AsyncImage
 import com.danielsalas.auto_music.data.MusicRepository
 import com.danielsalas.auto_music.sync.SyncManager
@@ -146,6 +150,23 @@ fun MainApp(
     var selectedPlaylist by remember { mutableStateOf<Playlist?>(null) }
     var isPlayerExpanded by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
+    var statusMessage by remember { mutableStateOf<String?>(null) }
+    
+    DisposableEffect(controller) {
+        val listener = object : Player.Listener {
+            override fun onPlayerError(error: PlaybackException) {
+                statusMessage = error.localizedMessage
+                if (error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS) {
+                    statusMessage = "HTTP 403: BotGuard detected."
+                }
+            }
+            override fun onMediaItemTransition(item: MediaItem?, reason: Int) {
+                statusMessage = null
+            }
+        }
+        controller?.addListener(listener)
+        onDispose { controller?.removeListener(listener) }
+    }
     
     var isMaintenanceRunning by remember { mutableStateOf(false) }
     var maintenanceSummary by remember { mutableStateOf<com.danielsalas.auto_music.data.MaintenanceSummary?>(null) }
@@ -207,6 +228,7 @@ fun MainApp(
                         MiniPlayer(
                             controller = c, 
                             isExpanded = isPlayerExpanded,
+                            statusMessage = statusMessage,
                             onToggleExpand = { isPlayerExpanded = !isPlayerExpanded },
                             onAlbumClick = { q ->
                                 isPlayerExpanded = false
@@ -309,7 +331,7 @@ fun playSong(song: Song, controller: MediaController?, playlistId: Long?) {
         }
 
         val item = MediaItem.Builder().setMediaId(mediaId).setMediaMetadata(metadata)
-            .setUri(uri).setMimeType("audio/mpeg").build()
+            .setUri(uri).build()
         c.setMediaItem(item)
         c.prepare()
         c.play()
@@ -318,17 +340,27 @@ fun playSong(song: Song, controller: MediaController?, playlistId: Long?) {
 
 @OptIn(UnstableApi::class)
 @Composable
-fun MiniPlayer(controller: MediaController, isExpanded: Boolean, onToggleExpand: () -> Unit, onAlbumClick: (String) -> Unit) {
+fun MiniPlayer(controller: MediaController, isExpanded: Boolean, statusMessage: String? = null, onToggleExpand: () -> Unit, onAlbumClick: (String) -> Unit) {
     var metadata by remember { mutableStateOf(controller.mediaMetadata) }
     var isPlaying by remember { mutableStateOf(controller.isPlaying) }
     var position by remember { mutableLongStateOf(controller.currentPosition) }
     var duration by remember { mutableLongStateOf(controller.duration) }
+    var playerError by remember { mutableStateOf<String?>(null) }
 
     DisposableEffect(controller) {
         val listener = object : Player.Listener {
             override fun onMediaMetadataChanged(m: MediaMetadata) { metadata = m }
             override fun onIsPlayingChanged(p: Boolean) { isPlaying = p }
-            override fun onPlaybackStateChanged(s: Int) { duration = controller.duration }
+            override fun onPlaybackStateChanged(s: Int) { 
+                duration = controller.duration
+                if (s == Player.STATE_READY) playerError = null
+            }
+            override fun onPlayerError(error: PlaybackException) {
+                playerError = "Playback Error: ${error.localizedMessage ?: "Unknown"}"
+                if (error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS) {
+                    playerError = "HTTP 403/500: Server blocked the request."
+                }
+            }
         }
         controller.addListener(listener)
         onDispose { controller.removeListener(listener) }

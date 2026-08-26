@@ -47,7 +47,7 @@ data class YouTubeClient(
             clientVersion = "1.61.48",
             clientId = "28",
             apiKey = KEY_ANDROID,
-            userAgent = "com.google.android.apps.youtube.vr.oculus/1.61.48 (Linux; U; Android 12; en_US; Quest 3; Build/SQ3A.220605.009.A1; Cronet/132.0.6808.3)",
+            userAgent = "com.google.android.apps.youtube.vr.oculus/1.61.48 (Linux; U; Android 12; en_US; Quest 3) [INFO_AND_TRACKING]",
             useSignatureTimestamp = false
         )
 
@@ -56,16 +56,16 @@ data class YouTubeClient(
             clientVersion = "1.9",
             clientId = "30",
             apiKey = KEY_ANDROID,
-            userAgent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
+            userAgent = "com.google.android.youtube/19.29.35 (Linux; U; Android 14; en_US; Pixel 7) gzip",
             useSignatureTimestamp = false
         )
 
         val ANDROID_MUSIC = YouTubeClient(
             clientName = "ANDROID_MUSIC",
-            clientVersion = "6.41.52",
-            clientId = "3",
-            apiKey = KEY_ANDROID,
-            userAgent = "com.google.android.apps.youtube.music/6.41.52 (Linux; U; Android 14; 23117RK66C) Build/UKQ1.230904.001",
+            clientVersion = "7.01.52",
+            clientId = "21",
+            apiKey = "AIzaSyAOghZGza2MQSZkY_zfZ370N-PUdXEo8AI",
+            userAgent = "com.google.android.apps.youtube.music/7.01.52 (Linux; U; Android 14; en_US; Pixel 7 Pro; Build/AP2A.240705.004) [INFO_AND_TRACKING]",
             useSignatureTimestamp = true,
             isMusic = true
         )
@@ -81,10 +81,10 @@ data class YouTubeClient(
 
         val WEB_REMIX = YouTubeClient(
             clientName = "WEB_REMIX",
-            clientVersion = "1.20240505.01.00",
+            clientVersion = "1.20240821.01.00",
             clientId = "67",
             apiKey = KEY_WEB_REMIX,
-            userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
+            userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.3",
             useSignatureTimestamp = true,
             isMusic = true
         )

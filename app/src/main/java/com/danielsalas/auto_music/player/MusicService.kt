@@ -99,24 +99,22 @@ class MusicService : MediaLibraryService() {
             // Resolve online stream
             val stream = try { 
                 runBlocking(Dispatchers.IO) { 
-                    withTimeoutOrNull(30000) { InnertubeResolver.resolveStream(videoId) } 
+                    InnertubeResolver.resolveStream(videoId) 
                 } 
             } catch (e: Exception) { 
-                Log.e("MusicService", "Stream resolution failed for $videoId: ${e.message}")
-                null 
+                Log.e("MusicService", "Stream resolution crash for $videoId: ${e.message}")
+                InnertubeResolver.ResolvedStream("", "", status = "CRASH", diagnosticLog = e.message ?: "Unknown Error")
             }
             
-            if (stream != null && stream.url.isNotEmpty()) {
+            if (stream.url.isNotEmpty()) {
                 Log.d("MusicService", "Resolved stream: ${stream.url}")
                 val headers = dataSpec.httpRequestHeaders.toMutableMap()
-                headers["User-Agent"] = stream.userAgent
                 
                 if (!stream.url.contains("googlevideo.com")) {
-                    headers.remove("Referer")
-                    headers.remove("Origin")
-                    headers.remove("X-YouTube-Client-Name")
-                    headers.remove("X-YouTube-Client-Version")
+                    headers.clear()
+                    headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.3"
                 } else {
+                    headers["User-Agent"] = stream.userAgent
                     headers["Referer"] = "https://www.youtube.com/"
                     headers["Origin"] = "https://www.youtube.com"
                 }
@@ -124,27 +122,18 @@ class MusicService : MediaLibraryService() {
                 return@Factory dataSpec.withUri(Uri.parse(stream.url)).withRequestHeaders(headers)
             }
             
-            val errorMsg = stream?.status ?: "Unknown resolution error"
-            Log.e("MusicService", "Resolution failed: $errorMsg")
+            val errorMsg = stream.diagnosticLog.ifEmpty { stream.status }
+            Log.e("MusicService", "Resolution failed for $videoId: $errorMsg")
             
-            // Notify UI
+            // Notify UI with detailed diagnostic log
             serviceScope.launch(Dispatchers.Main) {
-                player?.let { p ->
-                    p.currentMediaItem?.let { item ->
-                        val newMetadata = item.mediaMetadata.buildUpon()
-                            .setExtras(Bundle().apply { 
-                                item.mediaMetadata.extras?.let { putAll(it) }
-                                putString("playback_error", errorMsg) 
-                            })
-                            .build()
-                        // Since we can't easily update metadata of current item without reset, 
-                        // we rely on the error message being shown in the player UI via a custom broadcast.
-                        mediaSession?.broadcastCustomCommand(
-                            SessionCommand("PLAYBACK_ERROR", Bundle.EMPTY),
-                            Bundle().apply { putString("error", errorMsg) }
-                        )
+                mediaSession?.broadcastCustomCommand(
+                    SessionCommand("PLAYBACK_ERROR", Bundle.EMPTY),
+                    Bundle().apply { 
+                        putString("error", errorMsg)
+                        putString("videoId", videoId)
                     }
-                }
+                )
             }
             
             dataSpec.withUri(Uri.parse("error://resolution_failed?msg=${Uri.encode(errorMsg)}"))
@@ -345,7 +334,7 @@ class MusicService : MediaLibraryService() {
                 } else {
                     val updated = mediaItems.map { 
                         val songId = if (it.mediaId.contains("|")) it.mediaId.substringAfter("|") else it.mediaId
-                        repository.getSongById(songId)?.let { song -> createMediaItem(song, null) } ?: it.buildUpon().setUri("youtube://$songId").setMimeType("audio/mpeg").build()
+                        repository.getSongById(songId)?.let { song -> createMediaItem(song, null) } ?: it.buildUpon().setUri("youtube://$songId").setMimeType("audio/mp4").build()
                     }
                     future.set(MediaSession.MediaItemsWithStartPosition(updated, startIndex, startPositionMs))
                 }
@@ -356,10 +345,11 @@ class MusicService : MediaLibraryService() {
         private fun createMediaItem(song: com.danielsalas.auto_music.model.Song, playlistId: Long?): MediaItem {
             val isLocal = song.isDownloaded && song.audioUrl != null && File(song.audioUrl).exists()
             val uri = if (isLocal) Uri.fromFile(File(song.audioUrl)).toString() else "youtube://${song.id}"
+            val mimeType = if (isLocal) "audio/mpeg" else "audio/mp4" // YouTube itag 140 is audio/mp4
             val metadata = MediaMetadata.Builder().setTitle(song.title).setArtist(song.artist).setArtworkUri(song.thumbnailUrl.toUri()).setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
                 .setIsBrowsable(false).setIsPlayable(true)
                 .setExtras(Bundle().apply { if (playlistId != null) putString("playlistId", playlistId.toString()); putLong("android.media.metadata.DURATION", song.duration * 1000L); putString("album", song.album) }).build()
-            return MediaItem.Builder().setMediaId(if (playlistId != null) "PL$playlistId|${song.id}" else song.id).setUri(uri).setMimeType("audio/mpeg").setMediaMetadata(metadata).build()
+            return MediaItem.Builder().setMediaId(if (playlistId != null) "PL$playlistId|${song.id}" else song.id).setUri(uri).setMimeType(mimeType).setMediaMetadata(metadata).build()
         }
 
         override fun onGetLibraryRoot(session: MediaLibrarySession, browser: MediaSession.ControllerInfo, params: LibraryParams?): ListenableFuture<LibraryResult<MediaItem>> {

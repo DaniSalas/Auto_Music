@@ -6,18 +6,14 @@ import com.danielsalas.auto_music.data.remote.model.YouTubeClient
 import com.danielsalas.auto_music.data.remote.model.PlayerResponse
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import io.ktor.client.request.get
-import io.ktor.client.request.header
-import io.ktor.client.request.request
+import io.ktor.client.request.*
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpHeaders
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.*
 import java.net.URLDecoder
+import io.ktor.client.call.body
+import kotlinx.coroutines.withTimeoutOrNull
 
 object InnertubeResolver {
     private const val TAG = "InnertubeResolver"
@@ -26,60 +22,71 @@ object InnertubeResolver {
     data class ResolvedStream(
         val url: String,
         val userAgent: String,
-        val status: String = "OK"
+        val status: String = "OK",
+        val diagnosticLog: String = ""
     )
 
-    suspend fun resolveStream(videoId: String): ResolvedStream? {
-        cachedUrls[videoId]?.let { (stream, expiry) ->
+    suspend fun resolveStream(videoId: String): ResolvedStream {
+        if (cachedUrls.containsKey(videoId)) {
+            val (stream, expiry) = cachedUrls[videoId]!!
             if (System.currentTimeMillis() < expiry) return stream
         }
 
-        var lastError = "No attempts made"
+        val logBuilder = StringBuilder()
 
-        // Strategy 1: TV Embedded Bypass
+        // Strategy 1: TV Identity
         try {
-            Log.d(TAG, "Attempting TV_EMBEDDED for $videoId")
-            val response = Innertube.player(videoId, YouTubeClient.EMBEDDED)
+            Log.d(TAG, "Trying TV for $videoId")
+            val response = withTimeoutOrNull(8000) { Innertube.player(videoId, YouTubeClient.EMBEDDED) }
             if (response?.playabilityStatus?.status == "OK") {
                 val url = extractUrlFromResponse(response)
                 if (url != null) {
-                    return ResolvedStream(url, YouTubeClient.EMBEDDED.userAgent).also { cache(videoId, it, response) }
-                } else {
-                    lastError = "TV_EMBEDDED: No URL in response (Likely ciphered)"
-                }
-            } else {
-                lastError = "TV_EMBEDDED: ${response?.playabilityStatus?.reason ?: "Unknown Error"}"
-            }
-        } catch (e: Exception) { lastError = "TV_EMBEDDED: ${e.message}" }
+                    if (verifyStream(url)) {
+                        return ResolvedStream(url, YouTubeClient.EMBEDDED.userAgent).also { cache(videoId, it, response) }
+                    } else logBuilder.append("TV:403; ")
+                } else logBuilder.append("TV:Cipher; ")
+            } else logBuilder.append("TV:${response?.playabilityStatus?.status ?: "Timeout"}; ")
+        } catch (e: Exception) { logBuilder.append("TV:Err; ") }
 
-        // Strategy 2: Official ANDROID_MUSIC
+        // Strategy 2: Android Music Identity
         try {
-            Log.d(TAG, "Attempting ANDROID_MUSIC for $videoId")
-            val response = Innertube.player(videoId, YouTubeClient.ANDROID_MUSIC)
+            Log.d(TAG, "Trying Music for $videoId")
+            val response = withTimeoutOrNull(8000) { Innertube.player(videoId, YouTubeClient.ANDROID_MUSIC) }
             if (response?.playabilityStatus?.status == "OK") {
                 val url = extractUrlFromResponse(response)
                 if (url != null) {
-                    return ResolvedStream(url, YouTubeClient.ANDROID_MUSIC.userAgent).also { cache(videoId, it, response) }
-                } else {
-                    lastError = "ANDROID_MUSIC: No URL (Ciphered)"
-                }
-            } else {
-                lastError = "ANDROID_MUSIC: ${response?.playabilityStatus?.reason ?: "Unavailable"}"
-            }
-        } catch (e: Exception) { lastError = "ANDROID_MUSIC: ${e.message}" }
+                    if (verifyStream(url)) {
+                        return ResolvedStream(url, YouTubeClient.ANDROID_MUSIC.userAgent).also { cache(videoId, it, response) }
+                    } else logBuilder.append("Music:403; ")
+                } else logBuilder.append("Music:Cipher; ")
+            } else logBuilder.append("Music:${response?.playabilityStatus?.status ?: "Timeout"}; ")
+        } catch (e: Exception) { logBuilder.append("Music:Err; ") }
 
-        // Strategy 3: Invidious Proxy Pool
-        val proxyResult = fetchFromInvidiousProxy(videoId)
+        // Strategy 3: Proxy Pool
+        val proxyResult = fetchFromProxyPool(videoId)
         if (proxyResult is ProxyResult.Success) {
-            return ResolvedStream(proxyResult.url, "Mozilla/5.0").also { 
-                cachedUrls[videoId] = it to (System.currentTimeMillis() + 3600000L) 
-            }
+            return ResolvedStream(proxyResult.url, "Mozilla/5.0")
         } else if (proxyResult is ProxyResult.Failure) {
-            lastError = "Proxy: ${proxyResult.message}"
+            logBuilder.append("Proxy:${proxyResult.message}")
         }
 
-        Log.e(TAG, "❌ Resolution failed: $lastError")
-        return ResolvedStream("", "", status = lastError)
+        val finalLog = logBuilder.toString().ifEmpty { "No data returned from any engine" }
+        Log.e(TAG, "❌ All strategies failed: $finalLog")
+        return ResolvedStream("", "", status = "FAILED", diagnosticLog = finalLog)
+    }
+
+    private suspend fun verifyStream(url: String): Boolean {
+        return try {
+            withTimeoutOrNull(3000) {
+                val response = Innertube.client.request(url) {
+                    method = HttpMethod.Get
+                    header(HttpHeaders.Range, "bytes=0-1")
+                    header(HttpHeaders.UserAgent, "Mozilla/5.0")
+                    header(HttpHeaders.Accept, "*/*")
+                }
+                response.status.value < 400
+            } ?: false
+        } catch (e: Exception) { false }
     }
 
     private fun cache(videoId: String, stream: ResolvedStream, response: PlayerResponse) {
@@ -101,29 +108,36 @@ object InnertubeResolver {
         data class Failure(val message: String) : ProxyResult()
     }
 
-    private suspend fun fetchFromInvidiousProxy(videoId: String): ProxyResult {
+    private suspend fun fetchFromProxyPool(videoId: String): ProxyResult {
         val instances = listOf(
             "https://invidious.projectsegfau.lt",
-            "https://inv.nadeko.net",
+            "https://yewtu.be",
             "https://invidious.nerdvpn.de",
             "https://invidious.privacyredirect.com",
-            "https://yewtu.be"
+            "https://inv.thepixora.com"
         ).shuffled()
         
-        var errorAcc = ""
+        var errs = ""
         for (instance in instances) {
             try {
                 val target = "$instance/latest_version?id=$videoId&itag=140&local=true"
-                val response = Innertube.client.request(target) {
-                    method = HttpMethod.Head
-                    header(HttpHeaders.UserAgent, "Mozilla/5.0")
-                }
-                if (response.status.value < 400) return ProxyResult.Success(target)
-                else errorAcc += "${instance.substringAfter("://")}: ${response.status.value}; "
-            } catch (e: Exception) { 
-                errorAcc += "${instance.substringAfter("://")}: ${e.message}; "
-            }
+                val response = withTimeoutOrNull(5000) {
+                    Innertube.client.get(target) {
+                        header(HttpHeaders.Range, "bytes=0-200")
+                        header(HttpHeaders.UserAgent, "Mozilla/5.0")
+                        header(HttpHeaders.Accept, "*/*")
+                    }
+                } ?: continue
+
+                if (response.status.value < 400) {
+                    val bytes: ByteArray = response.body()
+                    val prefix = String(bytes)
+                    if (!prefix.contains("<!DOCTYPE") && !prefix.contains("<html") && !prefix.contains("BotGuard")) {
+                        return ProxyResult.Success(target)
+                    } else errs += "Bot; "
+                } else errs += "${response.status.value}; "
+            } catch (e: Exception) { errs += "Err; " }
         }
-        return ProxyResult.Failure(if (errorAcc.isEmpty()) "All instances down" else errorAcc)
+        return ProxyResult.Failure(errs.ifEmpty { "EmptyPool" })
     }
 }

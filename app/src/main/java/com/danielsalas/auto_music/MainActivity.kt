@@ -79,6 +79,8 @@ class MainActivity : ComponentActivity() {
             if (!allGranted) Toast.makeText(this, "Permissions required", Toast.LENGTH_SHORT).show()
         }
 
+    private var statusMessageState = mutableStateOf<String?>(null)
+
     @OptIn(UnstableApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -103,7 +105,16 @@ class MainActivity : ComponentActivity() {
         })[MainViewModel::class.java]
 
         val sessionToken = SessionToken(this, android.content.ComponentName(this, com.danielsalas.auto_music.player.MusicService::class.java))
-        val controllerFuture = MediaController.Builder(this, sessionToken).buildAsync()
+        val controllerFuture = MediaController.Builder(this, sessionToken)
+            .setListener(object : MediaController.Listener {
+                override fun onCustomCommand(controller: MediaController, command: SessionCommand, args: Bundle): ListenableFuture<SessionResult> {
+                    if (command.customAction == "PLAYBACK_ERROR") {
+                        statusMessageState.value = args.getString("error")
+                    }
+                    return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                }
+            })
+            .buildAsync()
 
         setContent {
             var controller by remember { mutableStateOf<MediaController?>(null) }
@@ -118,7 +129,7 @@ class MainActivity : ComponentActivity() {
             }
 
             Auto_MusicTheme(darkTheme = isDarkTheme) {
-                MainApp(viewModel, repository, controller, isDarkTheme, syncManager) { isDarkTheme = it }
+                MainApp(viewModel, repository, controller, isDarkTheme, syncManager, statusMessageState) { isDarkTheme = it }
             }
         }
     }
@@ -132,6 +143,7 @@ fun MainApp(
     controller: MediaController?,
     isDarkTheme: Boolean,
     syncManager: SyncManager,
+    externalStatusMessage: MutableState<String?>,
     onThemeChange: (Boolean) -> Unit
 ) {
     val context = LocalContext.current
@@ -151,21 +163,36 @@ fun MainApp(
     var isPlayerExpanded by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var statusMessage by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(externalStatusMessage.value) {
+        if (externalStatusMessage.value != null) {
+            statusMessage = externalStatusMessage.value
+            externalStatusMessage.value = null
+        }
+    }
     
     DisposableEffect(controller) {
+        if (controller == null) return@DisposableEffect onDispose {}
         val listener = object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
-                statusMessage = error.localizedMessage
-                if (error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS) {
-                    statusMessage = "HTTP 403: BotGuard detected."
+                // If we already have a detailed diagnostic log from resolution, don't overwrite it with a generic 3003
+                if (statusMessage == null || !statusMessage!!.contains(":")) {
+                    statusMessage = "Error: ${error.errorCodeName} (${error.errorCode})"
                 }
             }
+            override fun onMediaMetadataChanged(metadata: MediaMetadata) {
+                val error = metadata.extras?.getString("playback_error")
+                if (error != null) statusMessage = error
+            }
             override fun onMediaItemTransition(item: MediaItem?, reason: Int) {
-                statusMessage = null
+                statusMessage = item?.mediaMetadata?.extras?.getString("playback_error")
+            }
+            override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
+                if (reason == Player.DISCONTINUITY_REASON_AUTO_TRANSITION) statusMessage = null
             }
         }
-        controller?.addListener(listener)
-        onDispose { controller?.removeListener(listener) }
+        controller.addListener(listener)
+        onDispose { controller.removeListener(listener) }
     }
     
     var isMaintenanceRunning by remember { mutableStateOf(false) }
@@ -388,6 +415,26 @@ fun MiniPlayer(controller: MediaController, isExpanded: Boolean, statusMessage: 
                 Spacer(Modifier.height(32.dp))
                 Text(metadata.title?.toString() ?: "No Title", style = MaterialTheme.typography.headlineMedium, maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
                 Text(metadata.artist?.toString() ?: "Unknown Artist", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary, modifier = Modifier.clickable { metadata.artist?.let { onAlbumClick(it.toString()) } })
+                
+                val errorExtra = metadata.extras?.getString("playback_error")
+                val fullError = if (statusMessage?.contains("TV:") == true || statusMessage?.contains("MUSIC:") == true || statusMessage?.contains("Proxy:") == true) statusMessage else (errorExtra ?: statusMessage)
+                if (fullError != null) {
+                    Spacer(Modifier.height(16.dp))
+                    Surface(
+                        color = Color.Red.copy(alpha = 0.9f),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth().border(2.dp, Color.White, RoundedCornerShape(8.dp))
+                    ) {
+                        Text(
+                            text = "DIAGNOSTIC LOG:\n$fullError",
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                            color = Color.White,
+                            modifier = Modifier.padding(12.dp),
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+                
                 Spacer(Modifier.height(32.dp))
                 Slider(value = progress, onValueChange = { controller.seekTo((it * duration).toLong()) }, modifier = Modifier.fillMaxWidth())
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -410,7 +457,15 @@ fun MiniPlayer(controller: MediaController, isExpanded: Boolean, statusMessage: 
                     AsyncImage(model = metadata.artworkUri, contentDescription = null, modifier = Modifier.size(48.dp).clip(RoundedCornerShape(4.dp)), contentScale = ContentScale.Crop)
                     Column(modifier = Modifier.weight(1f).padding(start = 12.dp)) {
                         Text(metadata.title?.toString() ?: "No Title", style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Bold)
-                        Text(metadata.artist?.toString() ?: "Unknown Artist", style = MaterialTheme.typography.bodySmall, maxLines = 1)
+                        val errorExtra = metadata.extras?.getString("playback_error")
+                        val displayStatus = if (statusMessage != null && (statusMessage!!.contains("Error") || statusMessage!!.contains("TV:"))) statusMessage else (errorExtra ?: statusMessage ?: metadata.artist?.toString() ?: "Unknown Artist")
+                        Text(
+                            text = displayStatus!!, 
+                            style = MaterialTheme.typography.bodySmall, 
+                            maxLines = 1, 
+                            overflow = TextOverflow.Ellipsis,
+                            color = if (statusMessage?.contains("Error") == true || statusMessage?.contains("TV:") == true || errorExtra != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                     IconButton(onClick = { if (isPlaying) controller.pause() else controller.play() }) { Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, null) }
                 }
@@ -927,7 +982,7 @@ fun getTranslations(lang: String): AppTranslations {
             manIconManual = "Manual: Torna al teu ordre favorit.",
             manIconSearch = "Cercador: Salta a una cançó sense aturar la música.",
             manMaintenanceDesc = "Manteniment: Neteja arxius i prepara l'ús offline.",
-            manIconPlay = "Reproduir: Inicia la reproducció online o local a l'instant.",
+            manIconPlay = "Reproduir: Inicia a la reproducció online o local a l'instant.",
             manIconAdd = "Afegir (+): Guarda la cançó en una de les teves llistes.",
             manConfigDark = "Mode Fosc: Canvia entre el tema clar i el fosc.",
             manConfigAuto = "Auto-Descarrega: Baixa automàticament les cançons de les llistes.",

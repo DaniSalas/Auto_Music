@@ -53,10 +53,10 @@ data class YouTubeClient(
 
         val ANDROID_TESTSUITE = YouTubeClient(
             clientName = "ANDROID_TESTSUITE",
-            clientVersion = "1.9",
+            clientVersion = "1.15",
             clientId = "30",
             apiKey = KEY_ANDROID,
-            userAgent = "com.google.android.youtube/19.29.35 (Linux; U; Android 14; en_US; Pixel 7) gzip",
+            userAgent = "com.google.android.youtube/19.34.35 (Linux; U; Android 10) gzip",
             useSignatureTimestamp = false
         )
 
@@ -65,7 +65,7 @@ data class YouTubeClient(
             clientVersion = "7.01.52",
             clientId = "21",
             apiKey = "AIzaSyAOghZGza2MQSZkY_zfZ370N-PUdXEo8AI",
-            userAgent = "com.google.android.apps.youtube.music/7.01.52 (Linux; U; Android 14; en_US; Pixel 7 Pro; Build/AP2A.240705.004) [INFO_AND_TRACKING]",
+            userAgent = "com.google.android.apps.youtube.music/7.12.51 (Linux; U; Android 14; en_US; Pixel 8) [INFO_AND_TRACKING]",
             useSignatureTimestamp = true,
             isMusic = true
         )
@@ -94,7 +94,7 @@ data class YouTubeClient(
             clientVersion = "2.0",
             clientId = "85",
             apiKey = KEY_ANDROID,
-            userAgent = "Mozilla/5.0 (SMART-TV; LINUX; Tizen 6.0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/6.0 TV Safari/605.1.15",
+            userAgent = "Mozilla/5.0 (SMART-TV; LINUX; Tizen 7.0) AppleWebKit/605.1.15 (KHTML, like Gecko) SamsungBrowser/5.0 TV Safari/605.1.15",
             useSignatureTimestamp = false,
             isEmbedded = true
         )

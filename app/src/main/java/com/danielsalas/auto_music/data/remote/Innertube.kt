@@ -35,9 +35,9 @@ object Innertube {
         engine {
             config {
                 connectionPool(ConnectionPool(10, 5, TimeUnit.MINUTES))
-                connectTimeout(20, TimeUnit.SECONDS)
-                readTimeout(30, TimeUnit.SECONDS)
-                writeTimeout(20, TimeUnit.SECONDS)
+                connectTimeout(8, TimeUnit.SECONDS)
+                readTimeout(10, TimeUnit.SECONDS)
+                writeTimeout(8, TimeUnit.SECONDS)
                 protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
                 retryOnConnectionFailure(true)
             }
@@ -72,7 +72,7 @@ object Innertube {
                 contentType(ContentType.Application.Json)
                 header("X-Goog-Api-Format-Version", "1")
                 header("X-YouTube-Client-Name", "67")
-                header("X-YouTube-Client-Version", "1.20240826.01.00")
+                header("X-YouTube-Client-Version", "1.20260829.01.00")
                 header("X-Goog-Api-Key", clientType.apiKey)
                 visitorData?.let { header("X-Goog-Visitor-Id", it) }
                 userAgent(clientType.userAgent)
@@ -98,7 +98,7 @@ object Innertube {
                 contentType(ContentType.Application.Json)
                 header("X-Goog-Api-Format-Version", "1")
                 header("X-YouTube-Client-Name", "67")
-                header("X-YouTube-Client-Version", "1.20240826.01.00")
+                header("X-YouTube-Client-Version", "1.20260829.01.00")
                 header("X-Goog-Api-Key", clientType.apiKey)
                 userAgent(clientType.userAgent)
                 parameter("key", clientType.apiKey)
@@ -116,14 +116,14 @@ object Innertube {
                 context = context,
                 videoId = videoId,
                 playbackContext = PlayerBody.PlaybackContext(
-                    PlayerBody.PlaybackContext.ContentPlaybackContext(signatureTimestamp = 20684)
+                    PlayerBody.PlaybackContext.ContentPlaybackContext(signatureTimestamp = 20695)
                 )
             )
             
             val baseUrl = if (clientType.isMusic) InnertubeConstants.YOUTUBE_MUSIC_URL else InnertubeConstants.YOUTUBE_URL
             val response = client.post("${baseUrl}/youtubei/v1/player") {
                 contentType(ContentType.Application.Json)
-                header("X-Goog-Api-Format-Version", "1")
+                header("X-Goog-Api-Format-Version", "2") // Updated to v2
                 header("X-YouTube-Client-Name", clientType.clientId)
                 header("X-YouTube-Client-Version", clientType.clientVersion)
                 header("X-Goog-Api-Key", clientType.apiKey)
@@ -134,6 +134,7 @@ object Innertube {
                     header(HttpHeaders.Referrer, "${InnertubeConstants.YOUTUBE_MUSIC_URL}/")
                 } else if (clientType.isEmbedded) {
                     header("Referer", "https://www.youtube.com/embed/$videoId")
+                    header("X-YouTube-Page-CL", "20695")
                 } else {
                     header("Referer", "https://www.youtube.com/watch?v=$videoId")
                 }

@@ -1,0 +1,7 @@
+- [x] Implement `fetchFromArchiveFallback` in `InnertubeResolver.kt`
+- [x] Implement `decipher` logic in `InnertubeResolver.kt`
+- [x] Update client loop and error handling in `InnertubeResolver.kt`
+- [x] Refine `TV_EMBEDDED` client in `YouTubeClient.kt`
+- [x] Fix infinite resolution loop in `MusicService.kt`
+- [x] Fix metadata "Unknown" causing Archive.org search failure
+- [x] Verify build and deployment

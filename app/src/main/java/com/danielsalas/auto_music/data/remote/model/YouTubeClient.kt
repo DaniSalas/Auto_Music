@@ -60,12 +60,26 @@ data class YouTubeClient(
             useSignatureTimestamp = false
         )
 
+        val TV_EMBEDDED = YouTubeClient(
+            clientName = "TVHTML5_SIMPLY_EMBEDDED_PLAYER",
+            clientVersion = "3.0",
+            clientId = "86",
+            apiKey = KEY_ANDROID,
+            userAgent = "Mozilla/5.0 (SMART-TV; LINUX; Tizen 7.0) AppleWebKit/605.1.15 (KHTML, like Gecko) SamsungBrowser/6.2 TV Safari/605.1.15",
+            osName = "Tizen",
+            osVersion = "7.0",
+            deviceMake = "Samsung",
+            deviceModel = "SMART-TV",
+            useSignatureTimestamp = false,
+            isEmbedded = true
+        )
+
         val ANDROID_MUSIC = YouTubeClient(
             clientName = "ANDROID_MUSIC",
-            clientVersion = "7.17.51",
+            clientVersion = "7.27.51",
             clientId = "21",
             apiKey = "AIzaSyAOghZGza2MQSZkY_zfZ370N-PUdXEo8AI",
-            userAgent = "com.google.android.apps.youtube.music/7.17.51 (Linux; U; Android 14; en_US; Pixel 8 Pro) [INFO_AND_TRACKING]",
+            userAgent = "com.google.android.apps.youtube.music/7.27.51 (Linux; U; Android 14; en_US; Pixel 8 Pro) [INFO_AND_TRACKING]",
             useSignatureTimestamp = true,
             isMusic = true
         )
@@ -76,12 +90,16 @@ data class YouTubeClient(
             clientId = "5",
             apiKey = KEY_IOS,
             userAgent = "com.google.ios.youtube/19.34.35 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X)",
+            osName = "iOS",
+            osVersion = "17.5.1",
+            deviceMake = "Apple",
+            deviceModel = "iPhone16,2",
             useSignatureTimestamp = true
         )
 
         val WEB_REMIX = YouTubeClient(
             clientName = "WEB_REMIX",
-            clientVersion = "1.20240826.01.00",
+            clientVersion = "1.20260829.01.00",
             clientId = "67",
             apiKey = KEY_WEB_REMIX,
             userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.3",

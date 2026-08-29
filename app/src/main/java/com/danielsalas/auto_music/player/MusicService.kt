@@ -23,6 +23,7 @@ import androidx.media3.session.*
 import com.danielsalas.auto_music.data.MusicRepository
 import com.danielsalas.auto_music.data.local.MusicDatabase
 import com.danielsalas.auto_music.data.remote.YouTubeService
+import com.danielsalas.auto_music.model.Song
 import com.danielsalas.auto_music.player.cache.PlayerCache
 import com.danielsalas.auto_music.player.effects.CustomEqualizerAudioProcessor
 import com.google.common.collect.ImmutableList
@@ -63,7 +64,8 @@ class MusicService : MediaLibraryService() {
     private fun createDataSourceFactory(): androidx.media3.datasource.DataSource.Factory {
         val httpDataSourceFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
-            .setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.3")
+            .setConnectTimeoutMs(15000)
+            .setReadTimeoutMs(20000)
         
         val defaultDataSourceFactory = androidx.media3.datasource.DefaultDataSource.Factory(this, httpDataSourceFactory)
         
@@ -71,7 +73,14 @@ class MusicService : MediaLibraryService() {
             val uriString = dataSpec.uri.toString()
             Log.d("MusicService", "Resolving data source for: $uriString")
             
-            if (uriString.startsWith("file") || uriString.startsWith("content") || uriString.contains("googlevideo.com")) {
+            // CRITICAL: If it's already a full HTTP(S) URL and NOT a youtube:// link, 
+            // it's likely already resolved. Return it as is to prevent infinite loops.
+            if (uriString.startsWith("http") && !uriString.startsWith("https://music.youtube.com/watch") && !uriString.contains("youtube.com/watch")) {
+                // If it's a redirect or sub-request for an already resolved stream, just let it through.
+                return@Factory dataSpec
+            }
+            
+            if (uriString.startsWith("file") || uriString.startsWith("content")) {
                 return@Factory dataSpec
             }
             
@@ -99,7 +108,8 @@ class MusicService : MediaLibraryService() {
             // Resolve online stream
             val stream = try { 
                 runBlocking(Dispatchers.IO) { 
-                    InnertubeResolver.resolveStream(videoId) 
+                    val song = repository.getSongById(videoId) ?: Song(id = videoId, title = "Unknown", artist = "Unknown", thumbnailUrl = "")
+                    InnertubeResolver.resolveStream(song) 
                 } 
             } catch (e: Exception) { 
                 Log.e("MusicService", "Stream resolution crash for $videoId: ${e.message}")
@@ -107,20 +117,18 @@ class MusicService : MediaLibraryService() {
             }
             
             if (stream.url.isNotEmpty()) {
-                Log.d("MusicService", "Resolved stream: ${stream.url}")
+                Log.d("MusicService", "Resolved stream source: ${stream.status}")
                 val headers = dataSpec.httpRequestHeaders.toMutableMap()
                 
-                // Determine MIME type based on URL
-                val finalUri = Uri.parse(stream.url)
-                if (!stream.url.contains("googlevideo.com")) {
-                    headers.clear()
-                    headers["User-Agent"] = "Mozilla/5.0"
-                } else {
-                    headers["User-Agent"] = stream.userAgent
-                    headers["Referer"] = "https://www.youtube.com/"
-                    headers["Origin"] = "https://www.youtube.com"
+                // Apply dynamic headers from resolver
+                headers.putAll(stream.headers)
+                
+                // Critical: Ensure User-Agent is present
+                if (!headers.containsKey("User-Agent")) {
+                    headers["User-Agent"] = stream.userAgent.ifEmpty { "Mozilla/5.0" }
                 }
                 
+                val finalUri = Uri.parse(stream.url)
                 return@Factory dataSpec.withUri(finalUri).withRequestHeaders(headers)
             }
             
@@ -342,7 +350,10 @@ class MusicService : MediaLibraryService() {
                              updated.add(createMediaItem(song, null))
                         } else {
                              // Dynamic resolution for search results
-                             val resolved = withContext(Dispatchers.IO) { InnertubeResolver.resolveStream(songId) }
+                             val resolved = withContext(Dispatchers.IO) { 
+                                 val tempSong = Song(id = songId, title = it.mediaMetadata.title?.toString() ?: "Unknown", artist = it.mediaMetadata.artist?.toString() ?: "Unknown", thumbnailUrl = "")
+                                 InnertubeResolver.resolveStream(tempSong) 
+                             }
                              val uri = if (resolved.url.isNotEmpty()) resolved.url else "youtube://$songId"
                              updated.add(it.buildUpon().setUri(uri).setMimeType(resolved.mimeType).build())
                         }

@@ -96,12 +96,34 @@ class MusicRepository(
         if (videoId != null) {
             val title = renderer.flexColumns?.getOrNull(0)?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.joinToString("") { it.text ?: "" } ?: "Unknown"
             val subtitleRuns = renderer.flexColumns?.getOrNull(1)?.musicResponsiveListItemFlexColumnRenderer?.text?.runs
-            val artist = subtitleRuns?.firstOrNull()?.text ?: "Unknown"
-            val album = if (subtitleRuns != null && subtitleRuns.size >= 3) subtitleRuns[2].text else null
-            val thumb = renderer.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails?.lastOrNull()?.url ?: ""
-            val lengthText = renderer.lengthText?.runs?.firstOrNull()?.text ?: subtitleRuns?.lastOrNull()?.text
-            val durationSeconds = lengthText?.let { parseDuration(it) } ?: 0L
+            
+            var artist = "Unknown"
+            var album: String? = null
+            var durationSeconds = 0L
 
+            if (subtitleRuns != null) {
+                // Typical format: "Song • Artist • Album • 3:45" or "Artist • 3:45"
+                // We look for common patterns. Usually index 0 is type (Song/Video), index 2 is Artist, index 4 is Album, etc.
+                // But it varies. Let's try a more robust approach.
+                val texts = subtitleRuns.mapNotNull { it.text }.filter { it != " • " && it != "•" }
+                
+                if (texts.size >= 2) {
+                    artist = texts[0]
+                    // If the first one is "Song", artist is the second one
+                    if (artist == "Song" || artist == "Canción") {
+                        artist = texts.getOrNull(1) ?: "Unknown"
+                        album = texts.getOrNull(2)
+                    } else {
+                        album = texts.getOrNull(1)
+                    }
+                }
+                
+                val lengthText = renderer.lengthText?.runs?.firstOrNull()?.text 
+                    ?: texts.lastOrNull()?.takeIf { it.contains(":") }
+                durationSeconds = lengthText?.let { parseDuration(it) } ?: 0L
+            }
+
+            val thumb = renderer.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails?.lastOrNull()?.url ?: ""
             songs.add(Song(id = videoId, title = title, artist = artist, album = album, thumbnailUrl = thumb, duration = durationSeconds))
         }
     }
@@ -244,7 +266,7 @@ class MusicRepository(
         if (sp.contains("pending_${song.id}")) return
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val stream = com.danielsalas.auto_music.player.InnertubeResolver.resolveStream(song.id) ?: return@launch
+                val stream = com.danielsalas.auto_music.player.InnertubeResolver.resolveStream(song)
                 executeDownload(song, stream.url, stream.userAgent)
             } catch (e: Exception) { sp.edit().remove("pending_${song.id}").apply() }
         }
@@ -259,7 +281,17 @@ class MusicRepository(
             CoroutineScope(Dispatchers.IO).launch { updateSongDownloadStatus(song.id, file.absolutePath) }
             return
         }
-        val request = DownloadManager.Request(Uri.parse(url)).setTitle("Auto Music: ${song.title}").setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, "auto_music/$fileName").setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED).addRequestHeader("User-Agent", userAgent).addRequestHeader("Referer", "https://www.youtube.com/")
+        val request = DownloadManager.Request(Uri.parse(url))
+            .setTitle("Auto Music: ${song.title}")
+            .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, "auto_music/$fileName")
+            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+            .addRequestHeader("User-Agent", userAgent)
+        
+        // Only add YouTube Referer if it's a googlevideo URL
+        if (url.contains("googlevideo.com")) {
+            request.addRequestHeader("Referer", "https://www.youtube.com/")
+        }
+        
         val downloadId = (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
         sp.edit().putString(downloadId.toString(), song.id).putBoolean("pending_${song.id}", true).apply()
     }
@@ -288,7 +320,7 @@ class MusicRepository(
                 if (file.exists() && file.length() > 1024) { if (!song.isDownloaded) { musicDao.insertSong(song.copy(isDownloaded = true, audioUrl = file.absolutePath)); restoredSongs++ } }
                 else if (shouldDownload) {
                     if (song.isDownloaded) musicDao.insertSong(song.copy(isDownloaded = false, audioUrl = null))
-                    try { val stream = com.danielsalas.auto_music.player.InnertubeResolver.resolveStream(song.id); if (stream != null) { executeDownload(song, stream.url, stream.userAgent); totalRequeued++ } else errors.add(MaintenanceError(song.title, "YouTube blocked access")) } catch (e: Exception) { errors.add(MaintenanceError(song.title, e.message ?: "Network error")) }
+                    try { val stream = com.danielsalas.auto_music.player.InnertubeResolver.resolveStream(song); if (stream.url.isNotEmpty()) { executeDownload(song, stream.url, stream.userAgent); totalRequeued++ } else errors.add(MaintenanceError(song.title, "YouTube blocked access")) } catch (e: Exception) { errors.add(MaintenanceError(song.title, e.message ?: "Network error")) }
                     delay(500)
                 }
             }

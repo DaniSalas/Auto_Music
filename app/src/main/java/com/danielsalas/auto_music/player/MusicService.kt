@@ -110,16 +110,18 @@ class MusicService : MediaLibraryService() {
                 Log.d("MusicService", "Resolved stream: ${stream.url}")
                 val headers = dataSpec.httpRequestHeaders.toMutableMap()
                 
+                // Determine MIME type based on URL
+                val finalUri = Uri.parse(stream.url)
                 if (!stream.url.contains("googlevideo.com")) {
                     headers.clear()
-                    headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.3"
+                    headers["User-Agent"] = "Mozilla/5.0"
                 } else {
                     headers["User-Agent"] = stream.userAgent
                     headers["Referer"] = "https://www.youtube.com/"
                     headers["Origin"] = "https://www.youtube.com"
                 }
                 
-                return@Factory dataSpec.withUri(Uri.parse(stream.url)).withRequestHeaders(headers)
+                return@Factory dataSpec.withUri(finalUri).withRequestHeaders(headers)
             }
             
             val errorMsg = stream.diagnosticLog.ifEmpty { stream.status }
@@ -332,9 +334,18 @@ class MusicService : MediaLibraryService() {
                     val indexInPlaylist = expandedItems.indexOfFirst { it.mediaId.substringAfter("|") == (if (targetMId.contains("|")) targetMId.substringAfter("|") else targetMId) }
                     future.set(MediaSession.MediaItemsWithStartPosition(expandedItems, if (indexInPlaylist != -1) indexInPlaylist else 0, startPositionMs))
                 } else {
-                    val updated = mediaItems.map { 
+                    val updated = mutableListOf<MediaItem>()
+                    for (it in mediaItems) {
                         val songId = if (it.mediaId.contains("|")) it.mediaId.substringAfter("|") else it.mediaId
-                        repository.getSongById(songId)?.let { song -> createMediaItem(song, null) } ?: it.buildUpon().setUri("youtube://$songId").setMimeType("audio/mp4").build()
+                        val song = repository.getSongById(songId)
+                        if (song != null) {
+                             updated.add(createMediaItem(song, null))
+                        } else {
+                             // Dynamic resolution for search results
+                             val resolved = withContext(Dispatchers.IO) { InnertubeResolver.resolveStream(songId) }
+                             val uri = if (resolved.url.isNotEmpty()) resolved.url else "youtube://$songId"
+                             updated.add(it.buildUpon().setUri(uri).setMimeType(resolved.mimeType).build())
+                        }
                     }
                     future.set(MediaSession.MediaItemsWithStartPosition(updated, startIndex, startPositionMs))
                 }
@@ -345,7 +356,14 @@ class MusicService : MediaLibraryService() {
         private fun createMediaItem(song: com.danielsalas.auto_music.model.Song, playlistId: Long?): MediaItem {
             val isLocal = song.isDownloaded && song.audioUrl != null && File(song.audioUrl).exists()
             val uri = if (isLocal) Uri.fromFile(File(song.audioUrl)).toString() else "youtube://${song.id}"
-            val mimeType = if (isLocal) "audio/mpeg" else "audio/mp4" // YouTube itag 140 is audio/mp4
+            
+            val mimeType = when {
+                isLocal -> "audio/mpeg"
+                uri.contains(".m3u8") -> "application/x-mpegURL"
+                uri.contains(".mpd") -> "application/dash+xml"
+                else -> "audio/mp4"
+            }
+            
             val metadata = MediaMetadata.Builder().setTitle(song.title).setArtist(song.artist).setArtworkUri(song.thumbnailUrl.toUri()).setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
                 .setIsBrowsable(false).setIsPlayable(true)
                 .setExtras(Bundle().apply { if (playlistId != null) putString("playlistId", playlistId.toString()); putLong("android.media.metadata.DURATION", song.duration * 1000L); putString("album", song.album) }).build()

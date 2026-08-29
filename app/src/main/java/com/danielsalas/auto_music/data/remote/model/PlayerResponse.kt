@@ -20,7 +20,9 @@ data class PlayerResponse(
     data class StreamingData(
         val expiresInSeconds: Int? = null,
         val formats: List<Format>? = null,
-        val adaptiveFormats: List<Format>? = null
+        val adaptiveFormats: List<Format>? = null,
+        val hlsManifestUrl: String? = null,
+        val dashManifestUrl: String? = null
     ) {
         @Serializable
         data class Format(

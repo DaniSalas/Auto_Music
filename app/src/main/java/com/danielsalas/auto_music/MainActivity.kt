@@ -175,9 +175,9 @@ fun MainApp(
         if (controller == null) return@DisposableEffect onDispose {}
         val listener = object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
-                // If we already have a detailed diagnostic log from resolution, don't overwrite it with a generic 3003
-                if (statusMessage == null || !statusMessage!!.contains(":")) {
-                    statusMessage = "Error: ${error.errorCodeName} (${error.errorCode})"
+                // Do not overwrite detailed resolution logs with the generic Player error (like 3003)
+                if (statusMessage == null || statusMessage!!.startsWith("Resolving") || !statusMessage!!.contains(":")) {
+                    statusMessage = "Player Error: ${error.errorCodeName} (${error.errorCode})"
                 }
             }
             override fun onMediaMetadataChanged(metadata: MediaMetadata) {
@@ -185,7 +185,8 @@ fun MainApp(
                 if (error != null) statusMessage = error
             }
             override fun onMediaItemTransition(item: MediaItem?, reason: Int) {
-                statusMessage = item?.mediaMetadata?.extras?.getString("playback_error")
+                val error = item?.mediaMetadata?.extras?.getString("playback_error")
+                if (error != null) statusMessage = error
             }
             override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
                 if (reason == Player.DISCONTINUITY_REASON_AUTO_TRANSITION) statusMessage = null
@@ -277,12 +278,12 @@ fun MainApp(
             Surface(modifier = Modifier.padding(innerPadding).fillMaxSize(), color = if (isDarkTheme) MaterialTheme.colorScheme.background else Color(backgroundColor.toInt())) {
                 if (selectedPlaylist != null) {
                     PlaylistSongsScreen(viewModel, strings, selectedPlaylist!!, { selectedPlaylist = null }, { song ->
-                        playSong(song, controller, selectedPlaylist?.id)
+                        playSong(song, controller, selectedPlaylist?.id, externalStatusMessage)
                         if (!song.isDownloaded) scope.launch { viewModel.addSongToPlaylist(song, selectedPlaylist!!) }
                     })
                 } else {
                     when (currentScreen) {
-                        0 -> SearchScreen(viewModel, strings, searchQuery, { playSong(it, controller, null) })
+                        0 -> SearchScreen(viewModel, strings, searchQuery, { playSong(it, controller, null, externalStatusMessage) })
                         1 -> PlaylistsScreen(viewModel, strings, { selectedPlaylist = it }, {
                             if (syncId.isNotBlank()) {
                                 Toast.makeText(context, strings.syncing, Toast.LENGTH_SHORT).show()
@@ -342,7 +343,8 @@ fun MainApp(
 }
 
 @UnstableApi
-fun playSong(song: Song, controller: MediaController?, playlistId: Long?) {
+fun playSong(song: Song, controller: MediaController?, playlistId: Long?, statusState: MutableState<String?>? = null) {
+    statusState?.value = "Resolving stream..."
     controller?.let { c ->
         val metadata = MediaMetadata.Builder()
             .setTitle(song.title).setArtist(song.artist).setArtworkUri(android.net.Uri.parse(song.thumbnailUrl))
@@ -417,7 +419,8 @@ fun MiniPlayer(controller: MediaController, isExpanded: Boolean, statusMessage: 
                 Text(metadata.artist?.toString() ?: "Unknown Artist", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary, modifier = Modifier.clickable { metadata.artist?.let { onAlbumClick(it.toString()) } })
                 
                 val errorExtra = metadata.extras?.getString("playback_error")
-                val fullError = if (statusMessage?.contains("TV:") == true || statusMessage?.contains("MUSIC:") == true || statusMessage?.contains("Proxy:") == true) statusMessage else (errorExtra ?: statusMessage)
+                val isResolutionLog = statusMessage?.contains(":") == true
+                val fullError = if (isResolutionLog) statusMessage else (errorExtra ?: statusMessage)
                 if (fullError != null) {
                     Spacer(Modifier.height(16.dp))
                     Surface(

@@ -1,7 +1,10 @@
-- [x] Implement `fetchFromArchiveFallback` in `InnertubeResolver.kt`
-- [x] Implement `decipher` logic in `InnertubeResolver.kt`
-- [x] Update client loop and error handling in `InnertubeResolver.kt`
-- [x] Refine `TV_EMBEDDED` client in `YouTubeClient.kt`
-- [x] Fix infinite resolution loop in `MusicService.kt`
-- [x] Fix metadata "Unknown" causing Archive.org search failure
+- [x] Port `PoTokenGenerator` logic from Metrolist
+- [x] Create `po_token.html` asset for Botguard execution
+- [x] Update InnerTube models to support `poToken` and `serviceIntegrityDimensions`
+- [x] Integrate `poToken` generation into `Innertube.player` request
+- [x] Correct `InnertubeResolver` to handle `signatureCipher` (sts 20695)
+- [x] Restore client loop (IOS -> VR -> WEB_REMIX) with `poToken` support
+- [x] Implement synchronized lyrics fetching from LrcLib
+- [x] Redesign expanded player with compact cover and auto-scrolling lyrics
+- [x] Add "Download lyrics" setting in Config screen
 - [x] Verify build and deployment

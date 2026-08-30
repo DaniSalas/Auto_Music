@@ -12,5 +12,6 @@ data class Song(
     val thumbnailUrl: String,
     val audioUrl: String? = null,
     val duration: Long = 0,
-    val isDownloaded: Boolean = false
+    val isDownloaded: Boolean = false,
+    val lyrics: String? = null
 )

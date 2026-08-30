@@ -32,6 +32,8 @@ import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.SettableFuture
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okhttp3.OkHttpClient
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
@@ -61,6 +63,9 @@ class MusicService : MediaLibraryService() {
     private var loudnessEnhancer: LoudnessEnhancer? = null
     private var currentAudioSessionId: Int = 0
 
+    private val resolutionCache = mutableMapOf<String, Pair<InnertubeResolver.ResolvedStream, Long>>()
+    private val resolutionMutex = Mutex()
+
     private fun createDataSourceFactory(): androidx.media3.datasource.DataSource.Factory {
         val httpDataSourceFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
@@ -71,12 +76,8 @@ class MusicService : MediaLibraryService() {
         
         val resolvingDataSourceFactory = ResolvingDataSource.Factory(defaultDataSourceFactory) { dataSpec ->
             val uriString = dataSpec.uri.toString()
-            Log.d("MusicService", "Resolving data source for: $uriString")
             
-            // CRITICAL: If it's already a full HTTP(S) URL and NOT a youtube:// link, 
-            // it's likely already resolved. Return it as is to prevent infinite loops.
-            if (uriString.startsWith("http") && !uriString.startsWith("https://music.youtube.com/watch") && !uriString.contains("youtube.com/watch")) {
-                // If it's a redirect or sub-request for an already resolved stream, just let it through.
+            if (uriString.startsWith("http") && !uriString.contains("youtube.com/watch") && !uriString.contains("music.youtube.com/watch")) {
                 return@Factory dataSpec
             }
             
@@ -91,25 +92,25 @@ class MusicService : MediaLibraryService() {
                 else -> dataSpec.key ?: ""
             }
             
-            if (videoId.isBlank()) {
-                Log.w("MusicService", "Could not extract videoId from $uriString")
-                return@Factory dataSpec
-            }
+            if (videoId.isBlank()) return@Factory dataSpec
             
-            Log.d("MusicService", "Extracted videoId: $videoId")
-
             // Try local file first
             val localFile = File(getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "auto_music/$videoId.mp3")
             if (localFile.exists() && localFile.length() > 1024) {
-                Log.d("MusicService", "Found local file: ${localFile.absolutePath}")
                 return@Factory dataSpec.withUri(Uri.fromFile(localFile))
+            }
+
+            // Cache check
+            val now = System.currentTimeMillis()
+            resolutionCache[videoId]?.let { (cached, expiry) ->
+                if (now < expiry) return@Factory dataSpec.withUri(Uri.parse(cached.url)).withRequestHeaders(cached.headers)
             }
             
             // Resolve online stream
             val stream = try { 
                 runBlocking(Dispatchers.IO) { 
                     val song = repository.getSongById(videoId) ?: Song(id = videoId, title = "Unknown", artist = "Unknown", thumbnailUrl = "")
-                    InnertubeResolver.resolveStream(song) 
+                    InnertubeResolver.resolveStream(this@MusicService, song) 
                 } 
             } catch (e: Exception) { 
                 Log.e("MusicService", "Stream resolution crash for $videoId: ${e.message}")
@@ -117,25 +118,27 @@ class MusicService : MediaLibraryService() {
             }
             
             if (stream.url.isNotEmpty()) {
-                Log.d("MusicService", "Resolved stream source: ${stream.status}")
+                resolutionCache[videoId] = stream to (now + 300000) 
                 val headers = dataSpec.httpRequestHeaders.toMutableMap()
-                
-                // Apply dynamic headers from resolver
                 headers.putAll(stream.headers)
                 
-                // Critical: Ensure User-Agent is present
+                // Add essential browser headers if not present
                 if (!headers.containsKey("User-Agent")) {
                     headers["User-Agent"] = stream.userAgent.ifEmpty { "Mozilla/5.0" }
                 }
                 
-                val finalUri = Uri.parse(stream.url)
-                return@Factory dataSpec.withUri(finalUri).withRequestHeaders(headers)
+                // Metrolist style: force Range to start stream immediately and avoid 403 on some clients
+                if (!headers.containsKey("Range")) {
+                    headers["Range"] = "bytes=0-"
+                }
+                
+                Log.d("MusicService", "Playing stream: $videoId | Source: ${stream.status}")
+                return@Factory dataSpec.withUri(Uri.parse(stream.url)).withRequestHeaders(headers)
             }
             
             val errorMsg = stream.diagnosticLog.ifEmpty { stream.status }
             Log.e("MusicService", "Resolution failed for $videoId: $errorMsg")
             
-            // Notify UI with detailed diagnostic log
             serviceScope.launch(Dispatchers.Main) {
                 mediaSession?.broadcastCustomCommand(
                     SessionCommand("PLAYBACK_ERROR", Bundle.EMPTY),
@@ -352,7 +355,7 @@ class MusicService : MediaLibraryService() {
                              // Dynamic resolution for search results
                              val resolved = withContext(Dispatchers.IO) { 
                                  val tempSong = Song(id = songId, title = it.mediaMetadata.title?.toString() ?: "Unknown", artist = it.mediaMetadata.artist?.toString() ?: "Unknown", thumbnailUrl = "")
-                                 InnertubeResolver.resolveStream(tempSong) 
+                                 InnertubeResolver.resolveStream(this@MusicService, tempSong) 
                              }
                              val uri = if (resolved.url.isNotEmpty()) resolved.url else "youtube://$songId"
                              updated.add(it.buildUpon().setUri(uri).setMimeType(resolved.mimeType).build())

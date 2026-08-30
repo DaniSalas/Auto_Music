@@ -1,6 +1,5 @@
 package com.danielsalas.auto_music.data.remote
 
-import kotlinx.serialization.Serializable
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.engine.okhttp.OkHttp
@@ -13,6 +12,7 @@ import kotlinx.serialization.json.*
 import android.util.Log
 import com.danielsalas.auto_music.data.remote.model.PlayerResponse
 import com.danielsalas.auto_music.data.remote.model.YouTubeClient
+import com.danielsalas.auto_music.utils.potoken.PoTokenGenerator
 import java.util.concurrent.TimeUnit
 import okhttp3.ConnectionPool
 import okhttp3.Protocol
@@ -46,6 +46,13 @@ object Innertube {
 
     var visitorData: String? = "CgtuekFiRnJlRGdRRSip0crUBjIoCgJFUxIiEh4SHAsMDg8QERITFBUWFxgZGhscHR4fICEiIyQlJicgamLgAgrdAjE3LllURT1uQ0RuUi1Mc3FyYnlnWEg2TExtRHlrUnpDY29Ba3dmYlZEdEpVdm9ONlBjSVljZUZ2c0ZTQkRGWk5STFZyMkpBYVZxWnBrR1VuZlJNTWpsY01fMGhqV2VFNXVHRGVFcWowMVZ2MnBOYWI0M0FqX0tpVmhKdWhvNW9KNjViSHpSLTVoVDIxRG9kMENFbUlqdURmYlVnVF93QXZBMDhLVUxzamVZcEZtcEJvR2xaSjBOZUNyNzNfdlpiSHpZZ1Fzel9DQnpDYUR0VVpPdUFVcDFrWEZPcGFIbDV3N0NtU0UxeWNodDNWcjJ6dlU4bFhyUmprRjc4Z0U5YTIxbjdBUk5tRkNjMC14MFZSbXpaX0wzMEYya192blZhZ0lhYWJYMHhJcDFOVmluQkxJY21fWjRWM1l2SGhyUzh5aFFPS2o0MFBwck1aLU9sOTZKTUI1NWl1bTRfN2c%3D"
 
+    private var poTokenGenerator: PoTokenGenerator? = null
+    
+    fun initPoToken(context: android.content.Context) {
+        if (poTokenGenerator == null) {
+            poTokenGenerator = PoTokenGenerator(context)
+        }
+    }
 
     suspend fun fetchVisitorData() {
         try {
@@ -70,9 +77,8 @@ object Innertube {
             
             val response = client.post("${InnertubeConstants.YOUTUBE_MUSIC_URL}/youtubei/v1/search") {
                 contentType(ContentType.Application.Json)
-                header("X-Goog-Api-Format-Version", "1")
-                header("X-YouTube-Client-Name", "67")
-                header("X-YouTube-Client-Version", "1.20260829.01.00")
+                header("X-YouTube-Client-Name", clientType.clientId)
+                header("X-YouTube-Client-Version", clientType.clientVersion)
                 header("X-Goog-Api-Key", clientType.apiKey)
                 visitorData?.let { header("X-Goog-Visitor-Id", it) }
                 userAgent(clientType.userAgent)
@@ -85,7 +91,12 @@ object Innertube {
                 ))
             }
             if (response.status.value !in 200..299) return null
-            json.decodeFromString<InnerTubeResponse>(response.bodyAsText())
+            try {
+                json.decodeFromString<InnerTubeResponse>(response.bodyAsText())
+            } catch (e: Exception) {
+                Log.e("Innertube", "Search decode error: ${e.message}")
+                null
+            }
         } catch (e: Exception) { null }
     }
 
@@ -96,45 +107,48 @@ object Innertube {
             val context = clientType.toContext(visitorData)
             val response = client.post("${InnertubeConstants.YOUTUBE_MUSIC_URL}/youtubei/v1/browse") {
                 contentType(ContentType.Application.Json)
-                header("X-Goog-Api-Format-Version", "1")
-                header("X-YouTube-Client-Name", "67")
-                header("X-YouTube-Client-Version", "1.20260829.01.00")
+                header("X-YouTube-Client-Name", clientType.clientId)
+                header("X-YouTube-Client-Version", clientType.clientVersion)
                 header("X-Goog-Api-Key", clientType.apiKey)
                 userAgent(clientType.userAgent)
                 parameter("key", clientType.apiKey)
                 setBody(BrowseBody(browseId = browseId, context = context))
             }
             if (response.status.value !in 200..299) return null
-            json.decodeFromString<InnerTubeResponse>(response.bodyAsText())
+            try {
+                json.decodeFromString<InnerTubeResponse>(response.bodyAsText())
+            } catch (e: Exception) {
+                Log.e("Innertube", "Browse decode error: ${e.message}")
+                null
+            }
         } catch (e: Exception) { null }
     }
 
     suspend fun player(videoId: String, clientType: YouTubeClient): PlayerResponse? {
         return try {
-            val context = clientType.toContext(visitorData)
+            val tokens = poTokenGenerator?.getWebClientPoToken(videoId, visitorData ?: "")
+            
+            val context = clientType.toContext(visitorData, tokens?.playerRequestPoToken)
             val body = PlayerBody(
                 context = context,
                 videoId = videoId,
                 playbackContext = PlayerBody.PlaybackContext(
                     PlayerBody.PlaybackContext.ContentPlaybackContext(signatureTimestamp = 20695)
-                )
+                ),
+                poToken = tokens?.streamingDataPoToken
             )
             
             val baseUrl = if (clientType.isMusic) InnertubeConstants.YOUTUBE_MUSIC_URL else InnertubeConstants.YOUTUBE_URL
             val response = client.post("${baseUrl}/youtubei/v1/player") {
                 contentType(ContentType.Application.Json)
-                header("X-Goog-Api-Format-Version", "2") // Updated to v2
+                header("X-Goog-Api-Format-Version", "2")
                 header("X-YouTube-Client-Name", clientType.clientId)
                 header("X-YouTube-Client-Version", clientType.clientVersion)
                 header("X-Goog-Api-Key", clientType.apiKey)
                 visitorData?.let { header("X-Goog-Visitor-Id", it) }
                 
                 if (clientType.isMusic) {
-                    header("X-Origin", InnertubeConstants.YOUTUBE_MUSIC_URL)
-                    header(HttpHeaders.Referrer, "${InnertubeConstants.YOUTUBE_MUSIC_URL}/")
-                } else if (clientType.isEmbedded) {
-                    header("Referer", "https://www.youtube.com/embed/$videoId")
-                    header("X-YouTube-Page-CL", "20695")
+                    header("Referer", "https://music.youtube.com/")
                 } else {
                     header("Referer", "https://www.youtube.com/watch?v=$videoId")
                 }
@@ -144,7 +158,12 @@ object Innertube {
                 setBody(body)
             }
             if (response.status.value !in 200..299) return null
-            json.decodeFromString<PlayerResponse>(response.bodyAsText())
+            try {
+                json.decodeFromString<PlayerResponse>(response.bodyAsText())
+            } catch (e: Exception) {
+                Log.e("Innertube", "Player decode error: ${e.message}")
+                null
+            }
         } catch (e: Exception) { 
             Log.e("Innertube", "Player error: ${e.message}")
             null 

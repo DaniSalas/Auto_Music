@@ -8,12 +8,12 @@ plugins {
 
 android {
     namespace = "com.danielsalas.auto_music"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.danielsalas.auto_music"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 3
         versionName = "3.0.0"
 
@@ -90,6 +90,9 @@ dependencies {
     // Firebase for syncing
     implementation(platform("com.google.firebase:firebase-bom:33.9.0"))
     implementation("com.google.firebase:firebase-database-ktx")
+
+    // JavaScript Engine for YouTube Solver
+    implementation("app.cash.quickjs:quickjs-android:0.9.2")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

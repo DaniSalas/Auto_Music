@@ -18,6 +18,7 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
@@ -27,6 +28,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -38,6 +40,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Brush
 import androidx.lifecycle.ViewModelProvider
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -61,7 +65,10 @@ import com.danielsalas.auto_music.ui.MainViewModel
 import com.danielsalas.auto_music.ui.screens.PlaylistsScreen
 import com.danielsalas.auto_music.ui.screens.PlaylistSongsScreen
 import com.danielsalas.auto_music.ui.screens.SearchScreen
+import com.danielsalas.auto_music.ui.player.LyricsView
 import com.danielsalas.auto_music.ui.theme.Auto_MusicTheme
+import com.danielsalas.auto_music.utils.YouTubeSolver
+import androidx.compose.animation.*
 import com.google.common.util.concurrent.MoreExecutors
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -84,6 +91,8 @@ class MainActivity : ComponentActivity() {
     @OptIn(UnstableApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        com.danielsalas.auto_music.data.remote.Innertube.initPoToken(this)
         
         val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             arrayOf(android.Manifest.permission.READ_MEDIA_AUDIO, android.Manifest.permission.POST_NOTIFICATIONS)
@@ -154,8 +163,11 @@ fun MainApp(
     var language by remember { mutableStateOf(sp.getString("language", "ESPANOL_LATINO") ?: "ESPANOL_LATINO") }
     var syncId by remember { mutableStateOf(sp.getString("sync_id", "") ?: "") }
     var backgroundColor by remember { mutableLongStateOf(sp.getLong("bg_color", 0xFFFFFFFF.toLong())) }
-    var autoDownloadPrivate by remember { mutableStateOf(sp.getBoolean("auto_dl_private", false)) }
-    var autoDownloadPublic by remember { mutableStateOf(sp.getBoolean("auto_dl_public", false)) }
+    
+    val prefs = remember { context.getSharedPreferences("AutoMusicPrefs", Context.MODE_PRIVATE) }
+    var autoDownloadPrivate by remember { mutableStateOf(prefs.getBoolean("auto_dl_private", false)) }
+    var autoDownloadPublic by remember { mutableStateOf(prefs.getBoolean("auto_dl_public", false)) }
+    var downloadLyrics by remember { mutableStateOf(prefs.getBoolean("download_lyrics", true)) }
     
     val strings = remember(language) { getTranslations(language) }
     var currentScreen by remember { mutableIntStateOf(0) }
@@ -175,7 +187,6 @@ fun MainApp(
         if (controller == null) return@DisposableEffect onDispose {}
         val listener = object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
-                // Do not overwrite detailed resolution logs with the generic Player error (like 3003)
                 if (statusMessage == null || statusMessage!!.startsWith("Resolving") || !statusMessage!!.contains(":")) {
                     statusMessage = "Player Error: ${error.errorCodeName} (${error.errorCode})"
                 }
@@ -300,11 +311,12 @@ fun MainApp(
                                 isMaintenanceRunning = false
                             }
                         })
-                        2 -> ConfigScreen(strings, Color(backgroundColor.toInt()), isDarkTheme, syncId, autoDownloadPrivate, autoDownloadPublic,
+                        2 -> ConfigScreen(strings, Color(backgroundColor.toInt()), isDarkTheme, syncId, autoDownloadPrivate, autoDownloadPublic, downloadLyrics,
                             { syncId = it; sp.edit().putString("sync_id", it).apply() },
                             { onThemeChange(it); sp.edit().putBoolean("dark_mode", it).apply() },
-                            { autoDownloadPrivate = it; sp.edit().putBoolean("auto_dl_private", it).apply() },
-                            { autoDownloadPublic = it; sp.edit().putBoolean("auto_dl_public", it).apply() },
+                            { autoDownloadPrivate = it; prefs.edit().putBoolean("auto_dl_private", it).apply() },
+                            { autoDownloadPublic = it; prefs.edit().putBoolean("auto_dl_public", it).apply() },
+                            { downloadLyrics = it; prefs.edit().putBoolean("download_lyrics", it).apply() },
                             { backgroundColor = it.value.toLong(); sp.edit().putLong("bg_color", it.value.toLong()).apply() }
                         )
                         3 -> ManualScreen(strings, language)
@@ -331,7 +343,7 @@ fun MainApp(
                             if (maintenanceSummary!!.errors.isNotEmpty()) {
                                 Spacer(Modifier.height(8.dp))
                                 Text(strings.maintenanceErrorsTitle, color = MaterialTheme.colorScheme.error)
-                                maintenanceSummary!!.errors.forEach { Text("- $it", fontSize = 12.sp) }
+                                maintenanceSummary!!.errors.forEach { Text("- ${it.title}: ${it.reason}", fontSize = 12.sp) }
                             }
                         }
                     },
@@ -349,10 +361,14 @@ fun playSong(song: Song, controller: MediaController?, playlistId: Long?, status
         val metadata = MediaMetadata.Builder()
             .setTitle(song.title).setArtist(song.artist).setArtworkUri(android.net.Uri.parse(song.thumbnailUrl))
             .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC).setIsBrowsable(false).setIsPlayable(true)
+            .setExtras(Bundle().apply { 
+                putString("lyrics", song.lyrics)
+                putString("album", song.album)
+                if (playlistId != null) putString("playlistId", playlistId.toString())
+            })
             .build()
         val mediaId = if (playlistId != null) "PL$playlistId|${song.id}" else song.id
         
-        // Ensure URI uses youtube:// scheme if it's not a local file or direct URL, so MusicService resolves it via Innertube
         val uri = if (song.id.startsWith("http://") || song.id.startsWith("https://") || song.id.startsWith("file://") || song.id.startsWith("content://")) {
             android.net.Uri.parse(song.id)
         } else {
@@ -375,6 +391,9 @@ fun MiniPlayer(controller: MediaController, isExpanded: Boolean, statusMessage: 
     var position by remember { mutableLongStateOf(controller.currentPosition) }
     var duration by remember { mutableLongStateOf(controller.duration) }
     var playerError by remember { mutableStateOf<String?>(null) }
+    var showLyrics by remember { mutableStateOf(false) }
+
+    val lyrics = metadata.extras?.getString("lyrics")
 
     DisposableEffect(controller) {
         val listener = object : Player.Listener {
@@ -410,45 +429,97 @@ fun MiniPlayer(controller: MediaController, isExpanded: Boolean, statusMessage: 
 
     if (isExpanded) {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
-            Column(modifier = Modifier.padding(24.dp).fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
-                IconButton(onClick = onToggleExpand, modifier = Modifier.align(Alignment.Start)) { Icon(Icons.Default.KeyboardArrowDown, null) }
-                Spacer(Modifier.height(24.dp))
-                AsyncImage(model = metadata.artworkUri, contentDescription = null, modifier = Modifier.size(320.dp).clip(RoundedCornerShape(16.dp)), contentScale = ContentScale.Crop)
-                Spacer(Modifier.height(32.dp))
-                Text(metadata.title?.toString() ?: "No Title", style = MaterialTheme.typography.headlineMedium, maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
-                Text(metadata.artist?.toString() ?: "Unknown Artist", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary, modifier = Modifier.clickable { metadata.artist?.let { onAlbumClick(it.toString()) } })
-                
-                val errorExtra = metadata.extras?.getString("playback_error")
-                val isResolutionLog = statusMessage?.contains(":") == true
-                val fullError = if (isResolutionLog) statusMessage else (errorExtra ?: statusMessage)
-                if (fullError != null) {
-                    Spacer(Modifier.height(16.dp))
-                    Surface(
-                        color = Color.Red.copy(alpha = 0.9f),
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.fillMaxWidth().border(2.dp, Color.White, RoundedCornerShape(8.dp))
-                    ) {
-                        Text(
-                            text = "DIAGNOSTIC LOG:\n$fullError",
-                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
-                            color = Color.White,
-                            modifier = Modifier.padding(12.dp),
-                            textAlign = TextAlign.Center
-                        )
+            Box(modifier = Modifier.fillMaxSize()) {
+                Box(modifier = Modifier.fillMaxSize().background(
+                    Brush.verticalGradient(listOf(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f), MaterialTheme.colorScheme.surface))
+                ))
+
+                Column(modifier = Modifier.padding(24.dp).fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = onToggleExpand) { Icon(Icons.Default.KeyboardArrowDown, null) }
+                        if (lyrics != null) {
+                            IconButton(onClick = { showLyrics = !showLyrics }) { 
+                                Icon(
+                                    imageVector = Icons.Default.FormatQuote, 
+                                    contentDescription = null,
+                                    tint = if (showLyrics) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                ) 
+                            }
+                        }
                     }
-                }
-                
-                Spacer(Modifier.height(32.dp))
-                Slider(value = progress, onValueChange = { controller.seekTo((it * duration).toLong()) }, modifier = Modifier.fillMaxWidth())
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(formatTime(position), style = MaterialTheme.typography.labelSmall)
-                    Text(formatTime(duration), style = MaterialTheme.typography.labelSmall)
-                }
-                Spacer(Modifier.height(32.dp))
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceEvenly, modifier = Modifier.fillMaxWidth()) {
-                    IconButton(onClick = { controller.seekToPrevious() }, modifier = Modifier.size(64.dp)) { Icon(Icons.Default.SkipPrevious, null, modifier = Modifier.size(48.dp)) }
-                    FloatingActionButton(onClick = { if (isPlaying) controller.pause() else controller.play() }, containerColor = MaterialTheme.colorScheme.primaryContainer, modifier = Modifier.size(80.dp)) { Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, null, modifier = Modifier.size(48.dp)) }
-                    IconButton(onClick = { controller.seekToNext() }, modifier = Modifier.size(64.dp)) { Icon(Icons.Default.SkipNext, null, modifier = Modifier.size(48.dp)) }
+
+                    AnimatedContent(
+                        targetState = showLyrics,
+                        transitionSpec = { fadeIn() togetherWith fadeOut() },
+                        modifier = Modifier.weight(1f),
+                        label = "LyricsAnim"
+                    ) { lyricsEnabled ->
+                        if (lyricsEnabled && lyrics != null) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    AsyncImage(
+                                        model = metadata.artworkUri, 
+                                        contentDescription = null, 
+                                        modifier = Modifier.size(120.dp).clip(RoundedCornerShape(12.dp)).shadow(8.dp, RoundedCornerShape(12.dp)), 
+                                        contentScale = ContentScale.Crop
+                                    )
+                                    Column(modifier = Modifier.padding(start = 16.dp).weight(1f)) {
+                                        Text(metadata.title?.toString() ?: "No Title", style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text(metadata.artist?.toString() ?: "Unknown", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+                                    }
+                                }
+                                LyricsView(lyrics = lyrics, currentPositionMs = position)
+                            }
+                        } else {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center, modifier = Modifier.fillMaxSize()) {
+                                AsyncImage(
+                                    model = metadata.artworkUri, 
+                                    contentDescription = null, 
+                                    modifier = Modifier.size(260.dp).clip(RoundedCornerShape(24.dp)).shadow(12.dp, RoundedCornerShape(24.dp)), 
+                                    contentScale = ContentScale.Crop
+                                )
+                                Spacer(Modifier.height(32.dp))
+                                Text(metadata.title?.toString() ?: "No Title", style = MaterialTheme.typography.headlineMedium, maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+                                Text(metadata.artist?.toString() ?: "Unknown Artist", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary, modifier = Modifier.clickable { metadata.artist?.let { onAlbumClick(it.toString()) } })
+                            }
+                        }
+                    }
+                    
+                    Column {
+                        val errorExtra = metadata.extras?.getString("playback_error")
+                        val isResolutionLog = statusMessage?.contains(":") == true
+                        val fullError = if (isResolutionLog) statusMessage else (errorExtra ?: statusMessage)
+                        if (fullError != null) {
+                            Surface(
+                                color = Color.Red.copy(alpha = 0.8f),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
+                            ) {
+                                Text(
+                                    text = fullError,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.White,
+                                    modifier = Modifier.padding(8.dp),
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                        
+                        Slider(value = progress, onValueChange = { controller.seekTo((it * duration).toLong()) }, modifier = Modifier.fillMaxWidth())
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text(formatTime(position), style = MaterialTheme.typography.labelSmall)
+                            Text(formatTime(duration), style = MaterialTheme.typography.labelSmall)
+                        }
+                        Spacer(Modifier.height(16.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceEvenly, modifier = Modifier.fillMaxWidth()) {
+                            IconButton(onClick = { controller.seekToPrevious() }, modifier = Modifier.size(64.dp)) { Icon(Icons.Default.SkipPrevious, null, modifier = Modifier.size(40.dp)) }
+                            FloatingActionButton(onClick = { if (isPlaying) controller.pause() else controller.play() }, containerColor = MaterialTheme.colorScheme.primaryContainer, modifier = Modifier.size(72.dp), shape = CircleShape) { Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, null, modifier = Modifier.size(40.dp)) }
+                            IconButton(onClick = { controller.seekToNext() }, modifier = Modifier.size(64.dp)) { Icon(Icons.Default.SkipNext, null, modifier = Modifier.size(40.dp)) }
+                        }
+                    }
                 }
             }
         }
@@ -463,7 +534,7 @@ fun MiniPlayer(controller: MediaController, isExpanded: Boolean, statusMessage: 
                         val errorExtra = metadata.extras?.getString("playback_error")
                         val displayStatus = if (statusMessage != null && (statusMessage!!.contains("Error") || statusMessage!!.contains("TV:"))) statusMessage else (errorExtra ?: statusMessage ?: metadata.artist?.toString() ?: "Unknown Artist")
                         Text(
-                            text = displayStatus!!, 
+                            text = displayStatus ?: "Unknown", 
                             style = MaterialTheme.typography.bodySmall, 
                             maxLines = 1, 
                             overflow = TextOverflow.Ellipsis,
@@ -702,7 +773,7 @@ fun LanguageScreen(strings: AppTranslations, current: String, onSelect: (String)
 }
 
 @Composable
-fun ConfigScreen(strings: AppTranslations, bgColor: Color, isDark: Boolean, sId: String, dlPriv: Boolean, dlPub: Boolean, onSId: (String) -> Unit, onDark: (Boolean) -> Unit, onDlPriv: (Boolean) -> Unit, onDlPub: (Boolean) -> Unit, onColor: (Color) -> Unit) {
+fun ConfigScreen(strings: AppTranslations, bgColor: Color, isDark: Boolean, sId: String, dlPriv: Boolean, dlPub: Boolean, dlLrc: Boolean, onSId: (String) -> Unit, onDark: (Boolean) -> Unit, onDlPriv: (Boolean) -> Unit, onDlPub: (Boolean) -> Unit, onDlLrc: (Boolean) -> Unit, onColor: (Color) -> Unit) {
     Column(modifier = Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
         Text(strings.configTitle, style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(24.dp))
@@ -730,6 +801,7 @@ fun ConfigScreen(strings: AppTranslations, bgColor: Color, isDark: Boolean, sId:
         Text(strings.autoDownloadTitle, style = MaterialTheme.typography.titleMedium)
         Row(verticalAlignment = Alignment.CenterVertically) { Text(strings.autoDownloadPrivate, modifier = Modifier.weight(1f)); Switch(checked = dlPriv, onCheckedChange = onDlPriv) }
         Row(verticalAlignment = Alignment.CenterVertically) { Text(strings.autoDownloadPublic, modifier = Modifier.weight(1f)); Switch(checked = dlPub, onCheckedChange = onDlPub) }
+        Row(verticalAlignment = Alignment.CenterVertically) { Text(strings.downloadLyricsLabel, modifier = Modifier.weight(1f)); Switch(checked = dlLrc, onCheckedChange = onDlLrc) }
         
         Spacer(Modifier.height(32.dp))
         Text(strings.syncTitle, style = MaterialTheme.typography.titleMedium)
@@ -760,7 +832,7 @@ data class AppTranslations(
     val manConfigSync: String, val manConfigColor: String, val manIconNorm: String, val volumeNormalization: String,
     val equalizerTitle: String, val presets: String, val reverb: String, val manEqDesc: String,
     val graphicEq: String, val none: String, val carSpace: String, val mediumRoom: String, val largeHall: String,
-    val savePreset: String
+    val savePreset: String, val downloadLyricsLabel: String
 )
 
 fun getTranslations(lang: String): AppTranslations {
@@ -808,7 +880,7 @@ fun getTranslations(lang: String): AppTranslations {
         volumeNormalization = "Normalise Volume", equalizerTitle = "Equalizer", presets = "Presets",
         reverb = "Reverberation", manEqDesc = "Professional 10-band EQ with musical presets and 3D car space simulation.",
         graphicEq = "Graphic Equalizer", none = "None", carSpace = "Car Space", mediumRoom = "Medium Room",
-        largeHall = "Large Hall", savePreset = "Save Preset"
+        largeHall = "Large Hall", savePreset = "Save Preset", downloadLyricsLabel = "Download lyrics automatically"
     )
     
     return when(lang) {
@@ -857,8 +929,55 @@ fun getTranslations(lang: String): AppTranslations {
             volumeNormalization = "Igualar Volumen", equalizerTitle = "Ecualizador", presets = "Ajustes Pregrabados",
             reverb = "Reverberación", manEqDesc = "EQ profesional de 10 bandas con perfiles musicales y simulación de espacios 3D para el coche.",
             graphicEq = "Ecualizador Gráfico", none = "Ninguno", carSpace = "Espacio Coche", mediumRoom = "Habitación Pequeña",
-            largeHall = "Gran Sala", savePreset = "Guardar Ajust"
+            largeHall = "Gran Sala", savePreset = "Guardar Ajust", downloadLyricsLabel = "Descargar letras automáticamente"
         )
+        "CATALA" -> english.copy(
+            search = "Buscar", playlists = "Llistes", language = "Idioma", configTitle = "Configuració",
+            donationTitle = "Donació", donationText = "Si t'ha agradat la meva aplicació pots donar la quantitat que consideris.",
+            selectColor = "Selecciona el color de fons", close = "Tancar", brightness = "Brillantor", preview = "Vista prèvia",
+            darkMode = "Mode fosc", darkThemeNote = "El color personalitzat es desactiva en mode fosc",
+            syncTitle = "Sincronització al Núvol", syncIdLabel = "ID de Sincronització", syncHelp = "Fes servir el meme ID a tots els teus dispositius.",
+            generate = "Generar", deletePlaylist = "Eliminar llista", syncSuccess = "Sincronització correcta",
+            syncError = "Error en la sincronització", autoDownloadTitle = "Descarregues Automàtiques",
+            autoDownloadPrivate = "Llistes Privades", autoDownloadPublic = "Llistes Públiques", isPublic = "Pública",
+            isPrivate = "Privada", createPublic = "Crear Pública", createPrivate = "Crear Privada",
+            selectedItems = "seleccionades", searchPlaceholder = "Busca per títol, artista...",
+            noResults = "No s'han trobat resultats per a:", addToPlaylist = "Afegir a la llista",
+            cancel = "Cancel·lar", downloaded = "✓ Descarregada", downloading = "⏳ Descarregant...", online = "🌐 Online",
+            syncing = "Sincronitzant...", setupId = "Configura l'ID", newPlaylist = "Nova llista de reproducció",
+            nameField = "Nom", create = "Crear", maintenanceTitle = "Manteniment de la llibreria",
+            maintenanceRunning = "Netejant i verificant arxius...", maintenanceSummaryTitle = "Resum del Mantenimiento",
+            filesCleanedLabel = "Arxius netejats", songsRequeuedLabel = "Cançons reencuades",
+            songsRestoredLabel = "Cançons restauradas", maintenanceErrorsTitle = "Errors sense resoldre",
+            resumePlayback = "▶ Continuar última reproducció", resumePlaylist = "▶ Continuar aquesta lista",
+            sortAZ = "Ordenar A-Z", sortZA = "Ordenar Z-A", searchInList = "Buscar a la llista",
+            fixOrder = "Fixar aquest ordre", manualOrder = "Ordre personalitzat", findDuplicates = "Buscar duplicats",
+            songsCountLabel = "cançons", moveToPosition = "Moure a posició", manualTitle = "Manual d'Instruccions",
+            manWelcomeTitle = "Benvingut", manWelcomeDesc = "Auto Music és un reproductor híbrid dissenyat per al cotxe.",
+            manSearchDesc = "Busca cançons per títol o artista.",
+            manPlaylistsDesc = "Gestiona les teves col·leccions. Las llistes públiques es comparteixen, les privades només entre els teus dispositius.",
+            manSongsTitle = "Pantalla de Cançons", manSongsDesc = "Control profesional de la teva música en una llista.",
+            manIconDrag = "Arrossegar: Mantén premut i mou per canviar l'ordre.",
+            manIconShuffle = "Aleatori: El sistema recorda la teva preferència per llista.",
+            manIconDup = "Duplicats: Filtra per mostrar només cançons repetides.",
+            manIconAZ = "A-Z: Ordre visual temporal per ajudar-te a buscar.",
+            manIconFix = "Fixar: Guarda l'ordre visual actual com l'oficial.",
+            manIconManual = "Manual: Torna al teu ordre favorit.",
+            manIconSearch = "Cercador: Salta a una cançó sense aturar la música.",
+            manMaintenanceDesc = "Manteniment: Neteja arxius i prepara l'ús offline.",
+            manIconPlay = "Reproduir: Inicia a la reproducció online o local a l'instant.",
+            manIconAdd = "Afegir (+): Guarda la cançó en una de les teves llistes.",
+            manConfigDark = "Mode Fosc: Canvia entre el tema clar i el fosc.",
+            manConfigAuto = "Auto-Descarrega: Baixa automàticament les cançons de les llistes.",
+            manConfigSync = "Sincro: Introdueix el teu ID per tenir les llistes a tots els teus dispositius.",
+            manConfigColor = "Color de fons: Personalitza l'aspecte en mode clar.",
+            manIconNorm = "Normalització: Botó per igualar el volume de totes les cançons, per conduir segur.",
+            volumeNormalization = "Igualar Volum", equalizerTitle = "Equalitzador", presets = "Ajustos",
+            reverb = "Reverberació", manEqDesc = "EQ profesional de 10 bandes amb perfils musicals i simulació de cotxe 3D.",
+            graphicEq = "Equalitzador Gràfic", none = "Cap", carSpace = "Espai Cotxe", mediumRoom = "Sala Mitjana",
+            largeHall = "Gran Sala", savePreset = "Guardar Ajust",
+        downloadLyricsLabel = "Descargar letras automáticamente"
+    )
         "EUSKARA" -> english.copy(
             search = "Bilatu", playlists = "Zerrendak", language = "Hizkuntza", configTitle = "Konfigurazioa",
             donationTitle = "Dohaintza", donationText = "Nire aplikazioa gustatu bazaizu, nahi duzun zenbatekoa eman dezakezu.",
@@ -903,7 +1022,7 @@ fun getTranslations(lang: String): AppTranslations {
             volumeNormalization = "Bolumena Berdindu", equalizerTitle = "Ekualizadorea", presets = "Presets",
             reverb = "Erreberberazioa", manEqDesc = "10 bandako EQ profesionala presets musikaltiekin eta autorako 3D espazioekin.",
             graphicEq = "Ekualizadore Grafikoa", none = "Bat ere ez", carSpace = "Auto Gunea", mediumRoom = "Gela Ertaina",
-            largeHall = "Areto Handia", savePreset = "Gorde Preset"
+            largeHall = "Areto Handia", savePreset = "Gorde Preset", downloadLyricsLabel = "Download lyrics automatically"
         )
         "GALEGO" -> english.copy(
             search = "Buscar", playlists = "Listas", language = "Idioma", configTitle = "Configuración",
@@ -915,7 +1034,7 @@ fun getTranslations(lang: String): AppTranslations {
             syncError = "Erro na sincronización", autoDownloadTitle = "Descargas Automáticas",
             autoDownloadPrivate = "Listas Privadas", autoDownloadPublic = "Listas Públicas", isPublic = "Pública",
             isPrivate = "Privada", createPublic = "Crear Pública", createPrivate = "Crear Privada",
-            selectedItems = "seleccionadas", searchPlaceholder = "Busca por título, artista ou letra",
+            selectedItems = "seleccionadas", searchPlaceholder = "Busca por títol, artista ou letra",
             noResults = "Non se atoparon resultados para:", addToPlaylist = "Engadir á lista",
             cancel = "Cancelar", downloaded = "✓ Descargada", downloading = "⏳ Descargando...", online = "🌐 Online",
             syncing = "Sincronizando...", setupId = "Configura o ID", newPlaylist = "Nova lista de reprodución",
@@ -926,9 +1045,9 @@ fun getTranslations(lang: String): AppTranslations {
             resumePlayback = "▶ Continuar última reprodución", resumePlaylist = "▶ Continuar esta lista",
             sortAZ = "Ordenar A-Z", sortZA = "Ordenar Z-A", searchInList = "Buscar na lista",
             fixOrder = "Fixar esta orde", manualOrder = "Orde personalizada", findDuplicates = "Buscar duplicados",
-            songsCountLabel = "cancións", moveToPosition = "Mover a posición", manualTitle = "Manual de Instrucións",
+            songsCountLabel = "canciones", moveToPosition = "Mover a posición", manualTitle = "Manual de Instrucións",
             manWelcomeTitle = "Benvido", manWelcomeDesc = "Auto Music é un reprodutor híbrido deseñado para o coche.",
-            manSearchDesc = "Busca cancións por título ou artista.",
+            manSearchDesc = "Busca cancións por títol ou artista.",
             manPlaylistsDesc = "Xestiona as túas coleccións. As listas públicas compártense, as privadas só entre os teus dispositivos.",
             manSongsTitle = "Pantalla de Cancións", manSongsDesc = "Control profesional da túa música nunha lista.",
             manIconDrag = "Arrastrar: Mantén premido e move para cambiar a orde.",
@@ -939,9 +1058,9 @@ fun getTranslations(lang: String): AppTranslations {
             manIconManual = "Manual: Volve á túa orde favorita.",
             manIconSearch = "Buscador: Salta a unha canción sin deter a música.",
             manMaintenanceDesc = "Mantemento: Limpa arquivos e prepara o uso offline.",
-            manIconPlay = "Reproducir: Inicia a reprodución online ou local ao instante.",
+            manIconPlay = "Reproducir: Inicia a reprodución online o local ao instante.",
             manIconAdd = "Engadir (+): Garda a canción nunha das túas listas.",
-            manConfigDark = "Modo Escuro: Cambia entre o tema claro e o escuro.",
+            manConfigDark = "Modo Escuro: Cambia entre el tema claro e o escuro.",
             manConfigAuto = "Auto-Descarga: Baixa automaticamente as cancións das listas.",
             manConfigSync = "Sincro: Introduce o teu ID para ter as listas en todos os teus dispositivos.",
             manConfigColor = "Cor de fondo: Personaliza o aspecto en modo claro.",
@@ -949,73 +1068,32 @@ fun getTranslations(lang: String): AppTranslations {
             volumeNormalization = "Igualar Volume", equalizerTitle = "Ecualizador", presets = "Axustes",
             reverb = "Reverberación", manEqDesc = "EQ profesional de 10 bandas con perfiles musicais e simulación de coche 3D.",
             graphicEq = "Ecualizador Gráfico", none = "Ningún", carSpace = "Espazo Coche", mediumRoom = "Sala Mediana",
-            largeHall = "Gran Sala", savePreset = "Gardar Axuste"
-        )
-        "CATALA" -> english.copy(
-            search = "Buscar", playlists = "Llistes", language = "Idioma", configTitle = "Configuració",
-            donationTitle = "Donació", donationText = "Si t'ha agradat la meva aplicació pots donar la quantitat que consideris.",
-            selectColor = "Selecciona el color de fons", close = "Tancar", brightness = "Brillantor", preview = "Vista prèvia",
-            darkMode = "Mode fosc", darkThemeNote = "El color personalitzat es desactiva en mode fosc",
-            syncTitle = "Sincronització al Núvol", syncIdLabel = "ID de Sincronització", syncHelp = "Fes servir el mateix ID a tots els teus dispositius.",
-            generate = "Generar", deletePlaylist = "Eliminar llista", syncSuccess = "Sincronització correcta",
-            syncError = "Error en la sincronització", autoDownloadTitle = "Descarregues Automàtiques",
-            autoDownloadPrivate = "Llistes Privades", autoDownloadPublic = "Llistes Públiques", isPublic = "Pública",
-            isPrivate = "Privada", createPublic = "Crear Pública", createPrivate = "Crear Privada",
-            selectedItems = "seleccionades", searchPlaceholder = "Busca per títol, artista...",
-            noResults = "No s'han trobat resultats per a:", addToPlaylist = "Afegir a la llista",
-            cancel = "Cancel·lar", downloaded = "✓ Descarregada", downloading = "⏳ Descarregant...", online = "🌐 Online",
-            syncing = "Sincronitzant...", setupId = "Configura l'ID", newPlaylist = "Nova llista de reproducció",
-            nameField = "Nom", create = "Crear", maintenanceTitle = "Manteniment de la llibreria",
-            maintenanceRunning = "Netejant i verificant arxius...", maintenanceSummaryTitle = "Resum del Mantenimiento",
-            filesCleanedLabel = "Arxius netejats", songsRequeuedLabel = "Cançons reencuades",
-            songsRestoredLabel = "Cançons restaurades", maintenanceErrorsTitle = "Errors sense resoldre",
-            resumePlayback = "▶ Continuar última reproducció", resumePlaylist = "▶ Continuar aquesta llista",
-            sortAZ = "Ordenar A-Z", sortZA = "Ordenar Z-A", searchInList = "Buscar a la llista",
-            fixOrder = "Fixar aquest ordre", manualOrder = "Ordre personalitzat", findDuplicates = "Buscar duplicats",
-            songsCountLabel = "cançons", moveToPosition = "Moure a posició", manualTitle = "Manual d'Instruccions",
-            manWelcomeTitle = "Benvingut", manWelcomeDesc = "Auto Music és un reproductor híbrid dissenyat per al cotxe.",
-            manSearchDesc = "Busca cançons per títol o artista.",
-            manPlaylistsDesc = "Gestiona les teves col·leccions. Les llistes públiques es comparteixen, les privades només entre els teus dispositius.",
-            manSongsTitle = "Pantalla de Cançons", manSongsDesc = "Control professional de la teva música en una llista.",
-            manIconDrag = "Arrossegar: Mantén premut i mou per canviar l'ordre.",
-            manIconShuffle = "Aleatori: El sistema recorda la teva preferència per llista.",
-            manIconDup = "Duplicats: Filtra per mostrar només cançons repetidas.",
-            manIconAZ = "A-Z: Ordre visual temporal per ajudar-te a buscar.",
-            manIconFix = "Fixar: Guarda l'ordre visual actual com l'oficial.",
-            manIconManual = "Manual: Torna al teu ordre favorit.",
-            manIconSearch = "Cercador: Salta a una cançó sense aturar la música.",
-            manMaintenanceDesc = "Manteniment: Neteja arxius i prepara l'ús offline.",
-            manIconPlay = "Reproduir: Inicia a la reproducció online o local a l'instant.",
-            manIconAdd = "Afegir (+): Guarda la cançó en una de les teves llistes.",
-            manConfigDark = "Mode Fosc: Canvia entre el tema clar i el fosc.",
-            manConfigAuto = "Auto-Descarrega: Baixa automàticament les cançons de les llistes.",
-            manConfigSync = "Sincro: Introdueix el teu ID per tenir les llistes a tots els teus dispositius.",
-            manConfigColor = "Color de fons: Personalitza l'aspecte en mode clar.",
-            manIconNorm = "Normalització: Botó per igualar el volume de totes les cançons, per conduir segur.",
-            volumeNormalization = "Igualar Volum", equalizerTitle = "Equalitzador", presets = "Ajustos",
-            reverb = "Reverberació", manEqDesc = "EQ profesional de 10 bandes amb perfils musicals i simulació de cotxe 3D.",
-            graphicEq = "Equalitzador Gràfic", none = "Cap", carSpace = "Espai Cotxe", mediumRoom = "Sala Mitjana",
-            largeHall = "Gran Sala", savePreset = "Guardar Ajust"
+            largeHall = "Gran Sala", savePreset = "Gardar Axuste", downloadLyricsLabel = "Download lyrics automatically"
         )
         "FRANCAIS" -> english.copy(
             search = "Recherche", playlists = "Listes", language = "Langue", configTitle = "Configuration",
-            volumeNormalization = "Normalisation", equalizerTitle = "Égaliseur", carSpace = "Espace Voiture"
+            volumeNormalization = "Normalisation", equalizerTitle = "Égaliseur", carSpace = "Espace Voiture",
+            downloadLyricsLabel = "Télécharger les paroles automatiquement"
         )
         "DEUTSCH" -> english.copy(
             search = "Suche", playlists = "Listen", language = "Sprache", configTitle = "Konfiguration",
-            volumeNormalization = "Lautstärkenormalisierung", equalizerTitle = "Equalizer", carSpace = "Auto-Raum"
+            volumeNormalization = "Lautstärkenormalisierung", equalizerTitle = "Equalizer", carSpace = "Auto-Raum",
+            downloadLyricsLabel = "Songtexte automatisch herunterladen"
         )
         "ITALIANO" -> english.copy(
             search = "Cerca", playlists = "Playlist", language = "Lingua", configTitle = "Configurazione",
-            volumeNormalization = "Normalizzazione Volume", equalizerTitle = "Equalizzatore", carSpace = "Spazio Auto"
+            volumeNormalization = "Normalizzazione Volume", equalizerTitle = "Equalizzatore", carSpace = "Spazio Auto",
+            downloadLyricsLabel = "Scarica i testi automaticamente"
         )
         "KOREAN" -> english.copy(
             search = "검색", playlists = "재생 목록", language = "언어", configTitle = "설정",
-            volumeNormalization = "음량 정규화", equalizerTitle = "이퀄ライザー", carSpace = "자동차 공간"
+            volumeNormalization = "음량 정규화", equalizerTitle = "이퀄ライザー", carSpace = "자동차 공간",
+            downloadLyricsLabel = "가사 자동 다운로드"
         )
         "JAPANESE" -> english.copy(
             search = "検索", playlists = "プレイリスト", language = "言語", configTitle = "設定",
-            volumeNormalization = "音量の正規化", equalizerTitle = "イコライザー", carSpace = "車内空間"
+            volumeNormalization = "音量の正規化", equalizerTitle = "イ코라이저", carSpace = "車内空間",
+            downloadLyricsLabel = "歌詞を自動的にダウンロードする"
         )
         else -> english
     }

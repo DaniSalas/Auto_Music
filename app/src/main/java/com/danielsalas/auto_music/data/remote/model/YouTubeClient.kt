@@ -2,6 +2,7 @@ package com.danielsalas.auto_music.data.remote.model
 
 import com.danielsalas.auto_music.data.remote.InnerTubeClient
 import com.danielsalas.auto_music.data.remote.InnerTubeContext
+import com.danielsalas.auto_music.data.remote.ServiceIntegrityDimensions
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -21,7 +22,7 @@ data class YouTubeClient(
     val isEmbedded: Boolean = false,
     val isMusic: Boolean = false
 ) {
-    fun toContext(visitorData: String?) = InnerTubeContext(
+    fun toContext(visitorData: String?, poToken: String? = null) = InnerTubeContext(
         client = InnerTubeClient(
             clientName = clientName,
             clientVersion = clientVersion,
@@ -33,7 +34,8 @@ data class YouTubeClient(
             osVersion = osVersion,
             deviceMake = deviceMake,
             deviceModel = deviceModel,
-            androidSdkVersion = androidSdkVersion?.toIntOrNull()
+            androidSdkVersion = androidSdkVersion?.toIntOrNull(),
+            serviceIntegrityDimensions = poToken?.let { ServiceIntegrityDimensions(it) }
         )
     )
 

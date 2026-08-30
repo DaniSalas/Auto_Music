@@ -1,29 +1,39 @@
-# Plan de Implementación - Corrección de Error 2004 (Sincronización de Cabeceras)
+# Plan de Implementación: Motor Metrolist y Letras "Pro"
 
-El error `2004` indica que el servidor (YouTube o Archive.org) rechazó la conexión. Vamos a sincronizar exactamente las cabeceras de resolución con las de reproducción.
+El objetivo es sustituir los métodos de resolución fallidos por la técnica de Metrolist (WEB_REMIX + poToken) e integrar la visualización de letras en un reproductor rediseñado.
 
 ## User Review Required
 
-> [!WARNING]
-> YouTube ha empezado a validar que las cabeceras `X-YouTube-Client-Name` y `X-YouTube-Client-Version` estén presentes incluso en las peticiones de los fragmentos de video/audio (`googlevideo.com`). Las añadiremos dinámicamente.
+> [!CAUTION]
+> Vamos a eliminar los métodos de Archive.org y Piped del buscador principal para ganar velocidad y estabilidad. Si YouTube bloquea el poToken, fallará más rápido en lugar de reintentar infinitamente.
 
 ## Proposed Changes
 
 ### [Network / Resolver]
 
 #### [MODIFY] [InnertubeResolver.kt](file:///D:/Android/AndroidStudioProjects/Auto_Music/app/src/main/java/com/danielsalas/auto_music/player/InnertubeResolver.kt)
-- Expandir `ResolvedStream` para incluir un `Map<String, String>` de cabeceras adicionales.
-- Poblar estas cabeceras basándose en el cliente de YouTube utilizado (VR, TV, etc.).
+- **Simplificación Extrema**: Eliminar Archive.org, Piped y Proxies.
+- **Identidad WEB_REMIX**: Usar solo `WEB_REMIX` (es el que Metrolist usa con éxito).
+- **Manejo de Errores**: Si falla la resolución, devolver una URL vacía y un estado que el reproductor entienda para no entrar en bucle.
 
-### [Player]
+#### [MODIFY] [Innertube.kt](file:///D:/Android/AndroidStudioProjects/Auto_Music/app/src/main/java/com/danielsalas/auto_music/data/remote/Innertube.kt)
+- Refinar el cuerpo del POST `player` para inyectar el `poToken` en el lugar exacto.
 
-#### [MODIFY] [MusicService.kt](file:///D:/Android/AndroidStudioProjects/Auto_Music/app/src/main/java/com/danielsalas/auto_music/player/MusicService.kt)
-- Actualizar la lógica de `ResolvingDataSource` para inyectar todas las cabeceras proporcionadas por el `ResolvedStream`.
-- Eliminar cabeceras globales de `DefaultHttpDataSource` que puedan causar conflictos (como un `User-Agent` genérico de Chrome cuando el stream es de VR).
+### [UI / Player]
+
+#### [MODIFY] [MainActivity.kt](file:///D:/Android/AndroidStudioProjects/Auto_Music/app/src/main/java/com/danielsalas/auto_music/MainActivity.kt)
+- **Rediseño del Reproductor**: Carátula compacta (200dp) + área de letras de alta legibilidad.
+- **Configuración**: Implementar el toggle de "Descargar letras" de forma atractiva.
+
+### [Data / Repository]
+
+#### [MODIFY] [MusicRepository.kt](file:///D:/Android/AndroidStudioProjects/Auto_Music/app/src/main/java/com/danielsalas/auto_music/data/MusicRepository.kt)
+- Corregir errores de sintaxis previos.
+- Asegurar que la descarga de audio y letra está sincronizada.
 
 ## Verification Plan
 
 ### Manual Verification
-- Reproducir "With or Without You".
-- Abrir el "Network Inspector" de Android Studio si es necesario para confirmar que las peticiones a `googlevideo.com` llevan las cabeceras del cliente VR/TV.
-- Confirmar que el flujo pasa a Archive.org si YouTube devuelve un 403.
+- Intentar reproducir cualquier canción.
+- El Logcat debe mostrar `Level 0: Trying WEB_REMIX...` seguido de `✅ Success`.
+- Abrir letras y comprobar el auto-scroll.

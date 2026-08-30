@@ -5,3 +5,11 @@ plugins {
     alias(libs.plugins.ksp) apply false
     id("com.google.gms.google-services") version "4.5.0" apply false
 }
+
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+        maven { url = uri("https://jitpack.io") }
+    }
+}

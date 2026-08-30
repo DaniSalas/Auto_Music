@@ -102,14 +102,10 @@ class MusicRepository(
             var durationSeconds = 0L
 
             if (subtitleRuns != null) {
-                // Typical format: "Song • Artist • Album • 3:45" or "Artist • 3:45"
-                // We look for common patterns. Usually index 0 is type (Song/Video), index 2 is Artist, index 4 is Album, etc.
-                // But it varies. Let's try a more robust approach.
                 val texts = subtitleRuns.mapNotNull { it.text }.filter { it != " • " && it != "•" }
                 
                 if (texts.size >= 2) {
                     artist = texts[0]
-                    // If the first one is "Song", artist is the second one
                     if (artist == "Song" || artist == "Canción") {
                         artist = texts.getOrNull(1) ?: "Unknown"
                         album = texts.getOrNull(2)
@@ -240,8 +236,8 @@ class MusicRepository(
         }
     }
 
-    suspend fun updateSongDownloadStatus(songId: String, localPath: String) {
-        musicDao.getSongById(songId)?.let { musicDao.insertSong(it.copy(audioUrl = localPath, isDownloaded = true)) }
+    suspend fun updateSongDownloadStatus(songId: String, localPath: String, lyrics: String? = null) {
+        musicDao.getSongById(songId)?.let { musicDao.insertSong(it.copy(audioUrl = localPath, isDownloaded = true, lyrics = lyrics ?: it.lyrics)) }
     }
 
     fun getSongsInPlaylist(playlistId: Long): Flow<List<Song>> = musicDao.getSongsInPlaylist(playlistId)
@@ -264,36 +260,76 @@ class MusicRepository(
     fun downloadSong(song: Song) {
         val sp = context.getSharedPreferences("downloads", Context.MODE_PRIVATE)
         if (sp.contains("pending_${song.id}")) return
+        
+        val settings = context.getSharedPreferences("AutoMusicPrefs", Context.MODE_PRIVATE)
+        val downloadLyrics = settings.getBoolean("download_lyrics", true)
+
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val stream = com.danielsalas.auto_music.player.InnertubeResolver.resolveStream(song)
-                executeDownload(song, stream.url, stream.userAgent)
-            } catch (e: Exception) { sp.edit().remove("pending_${song.id}").apply() }
+                val lyrics = if (downloadLyrics) {
+                    com.danielsalas.auto_music.api.lrclib.LrcLib.getLyrics(song.title, song.artist, song.duration.toInt())
+                } else null
+
+                val stream = com.danielsalas.auto_music.player.InnertubeResolver.resolveStream(context, song)
+                if (stream.url.isNotEmpty()) {
+                    executeDownload(song, stream.url, stream.userAgent, lyrics)
+                } else {
+                    Log.w("MusicRepository", "Could not resolve stream for download: ${song.title}")
+                    sp.edit().remove("pending_${song.id}").apply()
+                }
+            } catch (e: Exception) { 
+                Log.e("MusicRepository", "Download error for ${song.title}: ${e.message}")
+                sp.edit().remove("pending_${song.id}").apply() 
+            }
         }
     }
 
-    private fun executeDownload(song: Song, url: String, userAgent: String) {
+    private fun executeDownload(song: Song, url: String, userAgent: String, lyrics: String? = null) {
         val sp = context.getSharedPreferences("downloads", Context.MODE_PRIVATE)
         val fileName = "${song.id}.mp3"
         val dir = getDownloadDir()
         val file = File(dir, fileName)
+        
         if (file.exists() && file.length() > 1024) {
-            CoroutineScope(Dispatchers.IO).launch { updateSongDownloadStatus(song.id, file.absolutePath) }
+            CoroutineScope(Dispatchers.IO).launch { updateSongDownloadStatus(song.id, file.absolutePath, lyrics) }
             return
         }
-        val request = DownloadManager.Request(Uri.parse(url))
-            .setTitle("Auto Music: ${song.title}")
-            .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, "auto_music/$fileName")
-            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            .addRequestHeader("User-Agent", userAgent)
-        
-        // Only add YouTube Referer if it's a googlevideo URL
-        if (url.contains("googlevideo.com")) {
-            request.addRequestHeader("Referer", "https://www.youtube.com/")
+
+        try {
+            if (lyrics != null) {
+                CoroutineScope(Dispatchers.IO).launch {
+                    val existing = musicDao.getSongById(song.id)
+                    if (existing != null) {
+                        musicDao.insertSong(existing.copy(lyrics = lyrics))
+                    } else {
+                        musicDao.insertSong(song.copy(lyrics = lyrics))
+                    }
+                }
+            }
+
+            val uri = Uri.parse(url)
+            if (uri.scheme == null || (!uri.scheme!!.startsWith("http") && !uri.scheme!!.startsWith("https"))) {
+                Log.e("MusicRepository", "Invalid download URI: $url")
+                sp.edit().remove("pending_${song.id}").apply()
+                return
+            }
+
+            val request = DownloadManager.Request(uri)
+                .setTitle("Auto Music: ${song.title}")
+                .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, "auto_music/$fileName")
+                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                .addRequestHeader("User-Agent", userAgent)
+            
+            if (url.contains("googlevideo.com")) {
+                request.addRequestHeader("Referer", "https://www.youtube.com/")
+            }
+            
+            val downloadId = (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
+            sp.edit().putString(downloadId.toString(), song.id).putBoolean("pending_${song.id}", true).apply()
+        } catch (e: Exception) {
+            Log.e("MusicRepository", "Download Manager failed for ${song.title}: ${e.message}")
+            sp.edit().remove("pending_${song.id}").apply()
         }
-        
-        val downloadId = (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
-        sp.edit().putString(downloadId.toString(), song.id).putBoolean("pending_${song.id}", true).apply()
     }
 
     suspend fun cancelAllDownloads() {
@@ -305,26 +341,57 @@ class MusicRepository(
     }
 
     suspend fun performLibraryMaintenance(): MaintenanceSummary = withContext(Dispatchers.IO) {
-        val errors = mutableListOf<MaintenanceError>(); var cleanedFiles = 0; var totalRequeued = 0; var restoredSongs = 0
-        val dir = getDownloadDir(); val allSongsInDb = musicDao.getAllSongsList(); val validSongIds = allSongsInDb.map { it.id }.toSet()
-        dir.listFiles()?.forEach { file -> if (file.name.endsWith(".mp3") && (file.name.removeSuffix(".mp3") !in validSongIds || file.length() < 1024)) { file.delete(); cleanedFiles++ } }
-        val sp = context.getSharedPreferences("AutoMusicPrefs", Context.MODE_PRIVATE); val autoDownloadPublic = sp.getBoolean("auto_download_public", true); val autoDownloadPrivate = sp.getBoolean("auto_download_private", true)
-        val playlists = musicDao.getAllPlaylists().first(); val uniqueSongs = mutableSetOf<String>()
-        for (playlist in playlists) {
-            val shouldDownload = if (playlist.isPublic) autoDownloadPublic else autoDownloadPrivate
-            val songsInPlaylist = musicDao.getSongsInPlaylist(playlist.id).first()
-            for (song in songsInPlaylist) {
-                if (song.id in uniqueSongs) continue
-                uniqueSongs.add(song.id)
-                val file = File(dir, "${song.id}.mp3")
-                if (file.exists() && file.length() > 1024) { if (!song.isDownloaded) { musicDao.insertSong(song.copy(isDownloaded = true, audioUrl = file.absolutePath)); restoredSongs++ } }
-                else if (shouldDownload) {
-                    if (song.isDownloaded) musicDao.insertSong(song.copy(isDownloaded = false, audioUrl = null))
-                    try { val stream = com.danielsalas.auto_music.player.InnertubeResolver.resolveStream(song); if (stream.url.isNotEmpty()) { executeDownload(song, stream.url, stream.userAgent); totalRequeued++ } else errors.add(MaintenanceError(song.title, "YouTube blocked access")) } catch (e: Exception) { errors.add(MaintenanceError(song.title, e.message ?: "Network error")) }
-                    delay(500)
+        val errors = mutableListOf<MaintenanceError>()
+        var cleanedFiles = 0; var totalRequeued = 0; var restoredSongs = 0
+        
+        try {
+            val dir = getDownloadDir()
+            val allSongsInDb = musicDao.getAllSongsList()
+            val validSongIds = allSongsInDb.map { it.id }.toSet()
+            
+            dir.listFiles()?.forEach { file -> 
+                if (file.name.endsWith(".mp3") && (file.name.removeSuffix(".mp3") !in validSongIds || file.length() < 1024)) { 
+                    file.delete()
+                    cleanedFiles++ 
+                } 
+            }
+            
+            val sp = context.getSharedPreferences("AutoMusicPrefs", Context.MODE_PRIVATE)
+            val autoDownloadPublic = sp.getBoolean("auto_download_public", true)
+            val autoDownloadPrivate = sp.getBoolean("auto_download_private", true)
+            
+            val playlists = musicDao.getAllPlaylists().first()
+            val uniqueSongs = mutableSetOf<String>()
+            
+            for (playlist in playlists) {
+                val shouldDownload = if (playlist.isPublic) autoDownloadPublic else autoDownloadPrivate
+                val songsInPlaylist = musicDao.getSongsInPlaylist(playlist.id).first()
+                
+                for (song in songsInPlaylist) {
+                    if (song.id in uniqueSongs) continue
+                    uniqueSongs.add(song.id)
+                    
+                    val file = File(dir, "${song.id}.mp3")
+                    if (file.exists() && file.length() > 1024) { 
+                        if (!song.isDownloaded) { 
+                            musicDao.insertSong(song.copy(isDownloaded = true, audioUrl = file.absolutePath))
+                            restoredSongs++ 
+                        } 
+                    } else if (shouldDownload) {
+                        if (song.isDownloaded) {
+                            musicDao.insertSong(song.copy(isDownloaded = false, audioUrl = null))
+                        }
+                        downloadSong(song)
+                        totalRequeued++
+                        delay(200)
+                    }
                 }
             }
+        } catch (e: Exception) {
+            Log.e("MusicRepository", "Maintenance CRASH: ${e.message}", e)
+            errors.add(MaintenanceError("Global", "Error crítico: ${e.message}"))
         }
+        
         MaintenanceSummary(cleanedFiles, totalRequeued, restoredSongs, errors)
     }
     

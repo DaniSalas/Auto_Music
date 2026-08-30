@@ -43,7 +43,13 @@ data class InnerTubeClient(
     val osVersion: String? = null,
     val androidSdkVersion: Int? = null,
     val deviceMake: String? = null,
-    val deviceModel: String? = null
+    val deviceModel: String? = null,
+    val serviceIntegrityDimensions: ServiceIntegrityDimensions? = null
+)
+
+@Serializable
+data class ServiceIntegrityDimensions(
+    val poToken: String? = null
 )
 
 @Serializable
@@ -52,7 +58,8 @@ data class PlayerBody(
     val videoId: String,
     val playlistId: String? = null,
     val cpn: String? = null,
-    val playbackContext: PlaybackContext? = null
+    val playbackContext: PlaybackContext? = null,
+    val poToken: String? = null
 ) {
     @Serializable
     data class PlaybackContext(

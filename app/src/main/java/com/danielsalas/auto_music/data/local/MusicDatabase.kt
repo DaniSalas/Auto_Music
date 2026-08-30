@@ -8,7 +8,7 @@ import com.danielsalas.auto_music.model.Playlist
 import com.danielsalas.auto_music.model.PlaylistSongCrossRef
 import com.danielsalas.auto_music.model.Song
 
-@Database(entities = [Song::class, Playlist::class, PlaylistSongCrossRef::class], version = 7, exportSchema = false)
+@Database(entities = [Song::class, Playlist::class, PlaylistSongCrossRef::class], version = 8, exportSchema = false)
 abstract class MusicDatabase : RoomDatabase() {
     abstract fun musicDao(): MusicDao
 

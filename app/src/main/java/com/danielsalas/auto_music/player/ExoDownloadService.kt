@@ -28,11 +28,17 @@ class ExoDownloadService : DownloadService(
         downloads: MutableList<Download>,
         notMetRequirements: Int
     ): Notification {
+        val title = if (downloads.size == 1) {
+            Util.fromUtf8Bytes(downloads[0].request.data)
+        } else {
+            resources.getQuantityString(R.plurals.n_song, downloads.size, downloads.size)
+        }
+        
         return DownloadUtil.getInstance(this).downloadNotificationHelper.buildProgressNotification(
             this,
             R.drawable.download,
             null,
-            null,
+            title,
             downloads,
             notMetRequirements
         )

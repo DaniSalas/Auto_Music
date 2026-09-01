@@ -176,6 +176,8 @@ fun MainApp(
     var isPlayerExpanded by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var statusMessage by remember { mutableStateOf<String?>(null) }
+    
+    val listenTogetherManager = remember(controller) { com.danielsalas.auto_music.sync.ListenTogetherManager(context, controller) }
 
     LaunchedEffect(externalStatusMessage.value) {
         if (externalStatusMessage.value != null) {
@@ -237,6 +239,7 @@ fun MainApp(
                 Spacer(Modifier.height(12.dp))
                 NavigationDrawerItem(label = { Text(strings.search) }, selected = currentScreen == 0, onClick = { scope.launch { drawerState.close() }; currentScreen = 0; selectedPlaylist = null }, icon = { Icon(Icons.Default.Search, null) })
                 NavigationDrawerItem(label = { Text(strings.playlists) }, selected = currentScreen == 1, onClick = { scope.launch { drawerState.close() }; currentScreen = 1; selectedPlaylist = null }, icon = { Icon(Icons.AutoMirrored.Filled.List, null) })
+                NavigationDrawerItem(label = { Text(strings.roomTitle) }, selected = currentScreen == 7, onClick = { scope.launch { drawerState.close() }; currentScreen = 7; selectedPlaylist = null }, icon = { Icon(Icons.Default.Groups, null) })
                 NavigationDrawerItem(label = { Text(strings.equalizerTitle) }, selected = currentScreen == 5, onClick = { scope.launch { drawerState.close() }; currentScreen = 5; selectedPlaylist = null }, icon = { Icon(Icons.Default.GraphicEq, null) })
                 NavigationDrawerItem(label = { Text(strings.language) }, selected = currentScreen == 6, onClick = { scope.launch { drawerState.close() }; currentScreen = 6; selectedPlaylist = null }, icon = { Icon(Icons.Default.Language, null) })
                 NavigationDrawerItem(label = { Text(strings.configTitle) }, selected = currentScreen == 2, onClick = { scope.launch { drawerState.close() }; currentScreen = 2; selectedPlaylist = null }, icon = { Icon(Icons.Default.Settings, null) })
@@ -334,6 +337,24 @@ fun MainApp(
                             sp.edit().putString("language", it).apply()
                             currentScreen = 0
                         }
+                        7 -> com.danielsalas.auto_music.ui.screens.ListenTogetherScreen(strings, listenTogetherManager)
+                    }
+                }
+            }
+            
+            if (isMaintenanceRunning) {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background.copy(alpha = 0.8f)
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxSize(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        CircularProgressIndicator()
+                        Spacer(Modifier.height(16.dp))
+                        Text(strings.working, style = MaterialTheme.typography.headlineSmall)
                     }
                 }
             }
@@ -576,11 +597,20 @@ fun ManualScreen(strings: AppTranslations, language: String) {
         ManualSection(strings.manSearchDesc, "")
         ManualHeader(strings.playlists)
         ManualSection(strings.manPlaylistsDesc, "")
+        
+        ManualHeader(strings.manLyricsTitle)
+        ManualSection(strings.manLyricsDesc, "")
+        
+        ManualHeader(strings.manRoomTitle)
+        ManualSection(strings.manRoomDesc, "")
+        Text(strings.roomNote, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(bottom = 16.dp))
+        
         ManualHeader(strings.manSongsTitle)
         ManualSection(strings.manSongsDesc, "")
         IconExplanation(Icons.Default.DragHandle, strings.manIconDrag)
         IconExplanation(Icons.Default.Shuffle, strings.manIconShuffle)
         IconExplanation(Icons.Default.VolumeUp, strings.manIconNorm)
+        IconExplanation(Icons.Default.FormatQuote, strings.manLyricsTitle)
         IconExplanation(Icons.Default.Difference, strings.manIconDup)
         IconExplanation(Icons.Default.SortByAlpha, strings.manIconAZ)
         IconExplanation(Icons.Default.Lock, strings.manIconFix)
@@ -851,7 +881,11 @@ data class AppTranslations(
     val manConfigSync: String, val manConfigColor: String, val manIconNorm: String, val volumeNormalization: String,
     val equalizerTitle: String, val presets: String, val reverb: String, val manEqDesc: String,
     val graphicEq: String, val none: String, val carSpace: String, val mediumRoom: String, val largeHall: String,
-    val savePreset: String, val downloadLyricsLabel: String
+    val savePreset: String, val downloadLyricsLabel: String,
+    val roomTitle: String, val roomCreate: String, val roomJoin: String, val roomLeave: String,
+    val roomCodeLabel: String, val roomOwnerLabel: String, val roomOwnerToggle: String,
+    val roomNote: String, val working: String, val manLyricsTitle: String, val manLyricsDesc: String,
+    val manRoomTitle: String, val manRoomDesc: String, val orSeparator: String
 )
 
 fun getTranslations(lang: String): AppTranslations {
@@ -899,7 +933,15 @@ fun getTranslations(lang: String): AppTranslations {
         volumeNormalization = "Normalise Volume", equalizerTitle = "Equalizer", presets = "Presets",
         reverb = "Reverberation", manEqDesc = "Professional 10-band EQ with musical presets and 3D car space simulation.",
         graphicEq = "Graphic Equalizer", none = "None", carSpace = "Car Space", mediumRoom = "Medium Room",
-        largeHall = "Large Hall", savePreset = "Save Preset", downloadLyricsLabel = "Download lyrics automatically"
+        largeHall = "Large Hall", savePreset = "Save Preset", downloadLyricsLabel = "Download lyrics automatically",
+        roomTitle = "Listening Room", roomCreate = "Create Room", roomJoin = "Join Room", roomLeave = "Leave Room",
+        roomCodeLabel = "Room Code", roomOwnerLabel = "Host Terminal", roomOwnerToggle = "Set as Room Owner",
+        roomNote = "For a smoother experience, it is advisable to have the playlist songs downloaded.",
+        working = "Working...", manLyricsTitle = "Lyrics", 
+        manLyricsDesc = "View synchronized lyrics by tapping the quote icon in the expanded player.",
+        manRoomTitle = "Shared Listening",
+        manRoomDesc = "Create or join a room to listen to the same music with friends in different vehicles.",
+        orSeparator = "--- OR ---"
     )
     
     return when(lang) {
@@ -948,14 +990,22 @@ fun getTranslations(lang: String): AppTranslations {
             volumeNormalization = "Igualar Volumen", equalizerTitle = "Ecualizador", presets = "Ajustes Pregrabados",
             reverb = "Reverberación", manEqDesc = "EQ profesional de 10 bandas con perfiles musicales y simulación de espacios 3D para el coche.",
             graphicEq = "Ecualizador Gráfico", none = "Ninguno", carSpace = "Espacio Coche", mediumRoom = "Habitación Pequeña",
-            largeHall = "Gran Sala", savePreset = "Guardar Ajust", downloadLyricsLabel = "Descargar letras automáticamente"
+            largeHall = "Gran Sala", savePreset = "Guardar Ajust", downloadLyricsLabel = "Descargar letras automáticamente",
+            roomTitle = "Sala de Escucha", roomCreate = "Crear Sala", roomJoin = "Unirse a Sala", roomLeave = "Salir de la Sala",
+            roomCodeLabel = "Código de Sala", roomOwnerLabel = "Terminal Dueño", roomOwnerToggle = "Establecer como Dueño",
+            roomNote = "Para que la Sala funcione más fluida es aconsejable tener las canciones de las listas descargadas.",
+            working = "Trabajando...", manLyricsTitle = "Letras",
+            manLyricsDesc = "Mira las letras sincronizadas pulsando el icono de las comillas en el reproductor expandido.",
+            manRoomTitle = "Escucha Compartida",
+            manRoomDesc = "Crea o únete a una sala para escuchar la misma música con amigos en diferentes vehículos.",
+            orSeparator = "--- O ---"
         )
         "CATALA" -> english.copy(
             search = "Buscar", playlists = "Llistes", language = "Idioma", configTitle = "Configuració",
             donationTitle = "Donació", donationText = "Si t'ha agradat la meva aplicació pots donar la quantitat que consideris.",
             selectColor = "Selecciona el color de fons", close = "Tancar", brightness = "Brillantor", preview = "Vista prèvia",
             darkMode = "Mode fosc", darkThemeNote = "El color personalitzat es desactiva en mode fosc",
-            syncTitle = "Sincronització al Núvol", syncIdLabel = "ID de Sincronització", syncHelp = "Fes servir el meme ID a tots els teus dispositius.",
+            syncTitle = "Sincronització al Núvol", syncIdLabel = "ID de Sincronització",            syncHelp = "Fes servir el mateix ID a tots els teus dispositius.",
             generate = "Generar", deletePlaylist = "Eliminar llista", syncSuccess = "Sincronització correcta",
             syncError = "Error en la sincronització", autoDownloadTitle = "Descarregues Automàtiques",
             autoDownloadPrivate = "Llistes Privades", autoDownloadPublic = "Llistes Públiques", isPublic = "Pública",
@@ -994,9 +1044,16 @@ fun getTranslations(lang: String): AppTranslations {
             volumeNormalization = "Igualar Volum", equalizerTitle = "Equalitzador", presets = "Ajustos",
             reverb = "Reverberació", manEqDesc = "EQ profesional de 10 bandes amb perfils musicals i simulació de cotxe 3D.",
             graphicEq = "Equalitzador Gràfic", none = "Cap", carSpace = "Espai Cotxe", mediumRoom = "Sala Mitjana",
-            largeHall = "Gran Sala", savePreset = "Guardar Ajust",
-        downloadLyricsLabel = "Descargar letras automáticamente"
-    )
+            largeHall = "Gran Sala", savePreset = "Guardar Ajust", downloadLyricsLabel = "Descarregar lletres automàticament",
+            roomTitle = "Sala d'Escolta", roomCreate = "Crear Sala", roomJoin = "Unir-se a Sala", roomLeave = "Sortir de la Sala",
+            roomCodeLabel = "Codi de Sala", roomOwnerLabel = "Terminal Amo", roomOwnerToggle = "Establir com Amo",
+            roomNote = "Perquè la Sala funcioni més fluida és aconsellable tenir les cançons de les llistes descarregades.",
+            working = "Treballant...", manLyricsTitle = "Lletres",
+            manLyricsDesc = "Mira les lletres sincronitzades prement la icona de les cometes al reproductor expandit.",
+            manRoomTitle = "Escolta Compartida",
+            manRoomDesc = "Crea o uneix-te a una sala per escoltar la mateixa música amb amics en diferents vehicles.",
+            orSeparator = "--- O ---"
+        )
         "EUSKARA" -> english.copy(
             search = "Bilatu", playlists = "Zerrendak", language = "Hizkuntza", configTitle = "Konfigurazioa",
             donationTitle = "Dohaintza", donationText = "Nire aplikazioa gustatu bazaizu, nahi duzun zenbatekoa eman dezakezu.",
@@ -1041,7 +1098,15 @@ fun getTranslations(lang: String): AppTranslations {
             volumeNormalization = "Bolumena Berdindu", equalizerTitle = "Ekualizadorea", presets = "Presets",
             reverb = "Erreberberazioa", manEqDesc = "10 bandako EQ profesionala presets musikaltiekin eta autorako 3D espazioekin.",
             graphicEq = "Ekualizadore Grafikoa", none = "Bat ere ez", carSpace = "Auto Gunea", mediumRoom = "Gela Ertaina",
-            largeHall = "Areto Handia", savePreset = "Gorde Preset", downloadLyricsLabel = "Download lyrics automatically"
+            largeHall = "Areto Handia", savePreset = "Gorde Preset", downloadLyricsLabel = "Letrak automatikoki deskargatu",
+            roomTitle = "Entzuteko Gela", roomCreate = "Gela Sortu", roomJoin = "Gelara Batu", roomLeave = "Gelatik Irten",
+            roomCodeLabel = "Gela Kodea", roomOwnerLabel = "Jabearen Terminala", roomOwnerToggle = "Jabe gisa ezarri",
+            roomNote = "Gela arinago ibil dadin gomendagarria da zerrendetako abestiak deskargatuta izatea.",
+            working = "Lanean...", manLyricsTitle = "Letrak",
+            manLyricsDesc = "Ikusi letra sinkronizatuak erreproduzitzaile hedatuan komatxoen ikonoa sakatuta.",
+            manRoomTitle = "Entzute Partekatua",
+            manRoomDesc = "Sortu edo batu gela batera lagunekin musika bera entzuteko hainbat ibilgailutan.",
+            orSeparator = "--- EDO ---"
         )
         "GALEGO" -> english.copy(
             search = "Buscar", playlists = "Listas", language = "Idioma", configTitle = "Configuración",
@@ -1087,32 +1152,80 @@ fun getTranslations(lang: String): AppTranslations {
             volumeNormalization = "Igualar Volume", equalizerTitle = "Ecualizador", presets = "Axustes",
             reverb = "Reverberación", manEqDesc = "EQ profesional de 10 bandas con perfiles musicais e simulación de coche 3D.",
             graphicEq = "Ecualizador Gráfico", none = "Ningún", carSpace = "Espazo Coche", mediumRoom = "Sala Mediana",
-            largeHall = "Gran Sala", savePreset = "Gardar Axuste", downloadLyricsLabel = "Download lyrics automatically"
+            largeHall = "Gran Sala", savePreset = "Gardar Axuste", downloadLyricsLabel = "Descargar letras automaticamente",
+            roomTitle = "Sala de Escoita", roomCreate = "Crear Sala", roomJoin = "Unirse a Sala", roomLeave = "Saír da Sala",
+            roomCodeLabel = "Código de Sala", roomOwnerLabel = "Terminal Dono", roomOwnerToggle = "Establecer como Dono",
+            roomNote = "Para que a Sala funcione máis fluída é aconsellable ter as cancións das listas descargadas.",
+            working = "Traballando...", manLyricsTitle = "Letras",
+            manLyricsDesc = "Mira as letras sincronizadas premendo a icona das comiñas no reprodutor expandido.",
+            manRoomTitle = "Escoita Compartida",
+            manRoomDesc = "Crea o únese a una sala para escoitar a mesma música con amigos en diferentes vehículos.",
+            orSeparator = "--- OU ---"
         )
         "FRANCAIS" -> english.copy(
             search = "Recherche", playlists = "Listes", language = "Langue", configTitle = "Configuration",
             volumeNormalization = "Normalisation", equalizerTitle = "Égaliseur", carSpace = "Espace Voiture",
-            downloadLyricsLabel = "Télécharger les paroles automatiquement"
+            downloadLyricsLabel = "Télécharger les paroles automatiquement",
+            roomTitle = "Salle d'Écoute", roomCreate = "Créer une Salle", roomJoin = "Rejoindre une Salle", roomLeave = "Quitter la Salle",
+            roomCodeLabel = "Code de la Salle", roomOwnerLabel = "Terminal Hôte", roomOwnerToggle = "Définir comme Propriétaire",
+            roomNote = "Pour une expérience plus fluide, il est conseillé de télécharger les chansons des listes.",
+            working = "Travail en cours...", manLyricsTitle = "Paroles",
+            manLyricsDesc = "Affichez les paroles synchronisées en appuyant sur l'icône de guillemets dans le lecteur étendu.",
+            manRoomTitle = "Écoute Partagée",
+            manRoomDesc = "Créez ou rejoignez une salle pour écouter la même musique avec des amis dans différents véhicules.",
+            orSeparator = "--- OU ---"
         )
         "DEUTSCH" -> english.copy(
             search = "Suche", playlists = "Listen", language = "Sprache", configTitle = "Konfiguration",
             volumeNormalization = "Lautstärkenormalisierung", equalizerTitle = "Equalizer", carSpace = "Auto-Raum",
-            downloadLyricsLabel = "Songtexte automatisch herunterladen"
+            downloadLyricsLabel = "Songtexte automatisch herunterladen",
+            roomTitle = "Hörraum", roomCreate = "Raum erstellen", roomJoin = "Raum beitreten", roomLeave = "Raum verlassen",
+            roomCodeLabel = "Raumcode", roomOwnerLabel = "Host-Terminal", roomOwnerToggle = "Als Besitzer festlegen",
+            roomNote = "Für ein reibungsloseres Erlebnis wird empfohlen, die Songs der Listen herunterzuladen.",
+            working = "Wird bearbeitet...", manLyricsTitle = "Songtexte",
+            manLyricsDesc = "Zeigen Sie synchronisierte Songtexte an, indem Sie auf das Anführungszeichen-Symbol im erweiterten Player tippen.",
+            manRoomTitle = "Gemeinsames Hören",
+            manRoomDesc = "Erstellen Sie einen Raum oder treten Sie einem bei, um dieselbe Musik mit Freunden in verschiedenen Fahrzeugen zu hören.",
+            orSeparator = "--- ODER ---"
         )
         "ITALIANO" -> english.copy(
             search = "Cerca", playlists = "Playlist", language = "Lingua", configTitle = "Configurazione",
             volumeNormalization = "Normalizzazione Volume", equalizerTitle = "Equalizzatore", carSpace = "Spazio Auto",
-            downloadLyricsLabel = "Scarica i testi automaticamente"
+            downloadLyricsLabel = "Scarica i testi automaticamente",
+            roomTitle = "Sala di Ascolto", roomCreate = "Crea Sala", roomJoin = "Entra nella Sala", roomLeave = "Esci dalla Sala",
+            roomCodeLabel = "Codice Sala", roomOwnerLabel = "Terminale Host", roomOwnerToggle = "Imposta come Proprietario",
+            roomNote = "Per un'esperienza più fluida, si consiglia di scaricare i brani delle playlist.",
+            working = "Lavorando...", manLyricsTitle = "Testi",
+            manLyricsDesc = "Visualizza i testi sincronizzati toccando l'icona delle virgolette nel player espanso.",
+            manRoomTitle = "Ascolto Condiviso",
+            manRoomDesc = "Crea o entra in una sala per ascoltare la stessa musica con gli amici in diversi veicoli.",
+            orSeparator = "--- O ---"
         )
         "KOREAN" -> english.copy(
             search = "검색", playlists = "재생 목록", language = "언어", configTitle = "설정",
             volumeNormalization = "음량 정규화", equalizerTitle = "이퀄ライザー", carSpace = "자동차 공간",
-            downloadLyricsLabel = "가사 자동 다운로드"
+            downloadLyricsLabel = "가사 자동 다운로드",
+            roomTitle = "청취실", roomCreate = "방 만들기", roomJoin = "방 참여하기", roomLeave = "방 나가기",
+            roomCodeLabel = "방 코드", roomOwnerLabel = "호스트 단말기", roomOwnerToggle = "방장으로 설정",
+            roomNote = "더 부드러운 경험을 위해 재생 목록 곡을 다운로드하는 것이 좋습니다.",
+            working = "작업 중...", manLyricsTitle = "가사",
+            manLyricsDesc = "확장된 플레이어에서 따옴표 아이콘을 눌러 동기화된 가사를 볼 수 있습니다.",
+            manRoomTitle = "공유 청취",
+            manRoomDesc = "방을 만들거나 참여하여 다른 차량에 있는 친구들과 동시에 같은 음악을 들을 수 있습니다.",
+            orSeparator = "--- 또는 ---"
         )
         "JAPANESE" -> english.copy(
             search = "検索", playlists = "プレイリスト", language = "言語", configTitle = "設定",
             volumeNormalization = "音量の正規化", equalizerTitle = "イ코라이저", carSpace = "車内空間",
-            downloadLyricsLabel = "歌詞を自動的にダウンロードする"
+            downloadLyricsLabel = "歌詞を自動的にダウンロードする",
+            roomTitle = "リスニングルーム", roomCreate = "ルームを作成", roomJoin = "ルームに参加", roomLeave = "ルームを退室",
+            roomCodeLabel = "ルームコード", roomOwnerLabel = "ホスト端末", roomOwnerToggle = "オーナーに設定",
+            roomNote = "よりスムーズな体験のために、リストの曲をダウンロードしておくことをお勧めします。",
+            working = "処理中...", manLyricsTitle = "歌詞",
+            manLyricsDesc = "拡張プレーヤーの引用符アイコンをタップして、同期された歌詞を表示します。",
+            manRoomTitle = "共有リスニング",
+            manRoomDesc = "ルームを作成または参加して、別の車両にいる友人と同時に同じ音楽を聴くことができます。",
+            orSeparator = "--- または ---"
         )
         else -> english
     }

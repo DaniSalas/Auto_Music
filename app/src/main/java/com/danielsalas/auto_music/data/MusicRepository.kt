@@ -286,7 +286,7 @@ class MusicRepository(
                     context,
                     com.danielsalas.auto_music.player.ExoDownloadService::class.java,
                     downloadRequest,
-                    false
+                    true
                 )
                 
                 sp.edit().putBoolean("pending_${song.id}", true).apply()

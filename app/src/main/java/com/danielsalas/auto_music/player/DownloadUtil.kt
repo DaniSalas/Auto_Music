@@ -115,6 +115,7 @@ class DownloadUtil(private val context: Context) {
         Executor { it.run() }
     ).apply {
         maxParallelDownloads = 3
+        requirements = androidx.media3.exoplayer.scheduler.Requirements(androidx.media3.exoplayer.scheduler.Requirements.NETWORK)
         addListener(object : DownloadManager.Listener {
             override fun onDownloadChanged(downloadManager: DownloadManager, download: Download, finalException: Exception?) {
                 downloads.update { it.toMutableMap().apply { put(download.request.id, download) } }

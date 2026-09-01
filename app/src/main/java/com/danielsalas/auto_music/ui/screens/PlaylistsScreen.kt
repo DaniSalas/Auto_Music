@@ -66,8 +66,7 @@ fun PlaylistsScreen(
                         }
                         if (onMaintenance != null) {
                             IconButton(onClick = onMaintenance, enabled = !isMaintenanceRunning) {
-                                if (isMaintenanceRunning) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                                else Icon(Icons.Default.Build, contentDescription = strings.maintenanceTitle)
+                                Icon(Icons.Default.Build, contentDescription = strings.maintenanceTitle)
                             }
                         }
                         if (onManualSync != null) {
@@ -80,62 +79,81 @@ fun PlaylistsScreen(
             )
         }
     ) { padding ->
-        LazyColumn(modifier = Modifier.padding(padding).fillMaxSize().padding(horizontal = 16.dp)) {
-            val privateLists = playlists.filter { !it.isPublic }
-            val publicLists = playlists.filter { it.isPublic }
+        Box(modifier = Modifier.fillMaxSize()) {
+            LazyColumn(modifier = Modifier.padding(padding).fillMaxSize().padding(horizontal = 16.dp)) {
+                val privateLists = playlists.filter { !it.isPublic }
+                val publicLists = playlists.filter { it.isPublic }
 
-            if (privateLists.isNotEmpty()) {
-                item {
-                    Text(strings.autoDownloadPrivate, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(vertical = 8.dp))
-                }
-                items(privateLists, key = { it.id }) { playlist ->
-                    val isSelected = selectedPlaylists.contains(playlist)
-                    PlaylistCard(
-                        playlist = playlist,
-                        typeLabel = strings.isPrivate,
-                        icon = if (isSelected) Icons.Default.CheckCircle else Icons.Default.Lock,
-                        isSelected = isSelected,
-                        onClick = {
-                            if (isSelectionMode) {
-                                if (isSelected) selectedPlaylists.remove(playlist) else selectedPlaylists.add(playlist)
-                            } else {
-                                onPlaylistClick(playlist)
+                if (privateLists.isNotEmpty()) {
+                    item {
+                        Text(strings.autoDownloadPrivate, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(vertical = 8.dp))
+                    }
+                    items(privateLists, key = { it.id }) { playlist ->
+                        val isSelected = selectedPlaylists.contains(playlist)
+                        PlaylistCard(
+                            playlist = playlist,
+                            typeLabel = strings.isPrivate,
+                            icon = if (isSelected) Icons.Default.CheckCircle else Icons.Default.Lock,
+                            isSelected = isSelected,
+                            onClick = {
+                                if (isSelectionMode) {
+                                    if (isSelected) selectedPlaylists.remove(playlist) else selectedPlaylists.add(playlist)
+                                } else {
+                                    onPlaylistClick(playlist)
+                                }
+                            },
+                            onLongClick = {
+                                if (!isSelected) selectedPlaylists.add(playlist)
                             }
-                        },
-                        onLongClick = {
-                            if (!isSelected) selectedPlaylists.add(playlist)
-                        }
-                    )
+                        )
+                    }
                 }
-            }
 
-            if (publicLists.isNotEmpty()) {
-                item {
-                    Spacer(Modifier.height(16.dp))
-                    Text(strings.autoDownloadPublic, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(vertical = 8.dp))
-                }
-                items(publicLists, key = { it.id }) { playlist ->
-                    val isSelected = selectedPlaylists.contains(playlist)
-                    PlaylistCard(
-                        playlist = playlist,
-                        typeLabel = strings.isPublic,
-                        icon = if (isSelected) Icons.Default.CheckCircle else Icons.Default.Public,
-                        isSelected = isSelected,
-                        onClick = {
-                            if (isSelectionMode) {
-                                if (isSelected) selectedPlaylists.remove(playlist) else selectedPlaylists.add(playlist)
-                            } else {
-                                onPlaylistClick(playlist)
+                if (publicLists.isNotEmpty()) {
+                    item {
+                        Spacer(Modifier.height(16.dp))
+                        Text(strings.autoDownloadPublic, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(vertical = 8.dp))
+                    }
+                    items(publicLists, key = { it.id }) { playlist ->
+                        val isSelected = selectedPlaylists.contains(playlist)
+                        PlaylistCard(
+                            playlist = playlist,
+                            typeLabel = strings.isPublic,
+                            icon = if (isSelected) Icons.Default.CheckCircle else Icons.Default.Public,
+                            isSelected = isSelected,
+                            onClick = {
+                                if (isSelectionMode) {
+                                    if (isSelected) selectedPlaylists.remove(playlist) else selectedPlaylists.add(playlist)
+                                } else {
+                                    onPlaylistClick(playlist)
+                                }
+                            },
+                            onLongClick = {
+                                if (!isSelected) selectedPlaylists.add(playlist)
                             }
-                        },
-                        onLongClick = {
-                            if (!isSelected) selectedPlaylists.add(playlist)
-                        }
-                    )
+                        )
+                    }
                 }
+                
+                item { Spacer(Modifier.height(80.dp)) }
             }
             
-            item { Spacer(Modifier.height(80.dp)) }
+            if (isMaintenanceRunning) {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background.copy(alpha = 0.8f)
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxSize(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        CircularProgressIndicator()
+                        Spacer(Modifier.height(16.dp))
+                        Text(strings.working, style = MaterialTheme.typography.headlineSmall)
+                    }
+                }
+            }
         }
     }
 

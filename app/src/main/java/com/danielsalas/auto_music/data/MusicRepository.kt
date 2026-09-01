@@ -21,6 +21,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
+@androidx.media3.common.util.UnstableApi
 class MusicRepository(
     private val musicDao: MusicDao,
     private val youtubeService: YouTubeService,
@@ -28,12 +29,6 @@ class MusicRepository(
 ) {
     val allPlaylists: Flow<List<Playlist>> = musicDao.getAllPlaylists()
     val allSongs: Flow<List<Song>> = musicDao.getAllSongs()
-
-    private fun getDownloadDir(): File {
-        val dir = File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "auto_music")
-        if (!dir.exists()) dir.mkdirs()
-        return dir
-    }
 
     suspend fun searchSongs(query: String): List<Song> {
         return try {
@@ -240,6 +235,10 @@ class MusicRepository(
         musicDao.getSongById(songId)?.let { musicDao.insertSong(it.copy(audioUrl = localPath, isDownloaded = true, lyrics = lyrics ?: it.lyrics)) }
     }
 
+    suspend fun updateLyrics(songId: String, lyrics: String) {
+        musicDao.getSongById(songId)?.let { musicDao.insertSong(it.copy(lyrics = lyrics)) }
+    }
+
     fun getSongsInPlaylist(playlistId: Long): Flow<List<Song>> = musicDao.getSongsInPlaylist(playlistId)
 
     suspend fun checkAndDownloadPlaylistSongs(playlistId: Long) {
@@ -249,9 +248,9 @@ class MusicRepository(
         if (!shouldDownload) return
 
         val songs = musicDao.getSongsInPlaylist(playlistId).first()
+        val downloadUtil = com.danielsalas.auto_music.player.DownloadUtil.getInstance(context)
         songs.forEach { song ->
-            val file = File(getDownloadDir(), "${song.id}.mp3")
-            if (!song.isDownloaded || !file.exists()) {
+            if (!song.isDownloaded) {
                 downloadSong(song)
             }
         }
@@ -269,35 +268,8 @@ class MusicRepository(
                 val lyrics = if (downloadLyrics) {
                     com.danielsalas.auto_music.api.lrclib.LrcLib.getLyrics(song.title, song.artist, song.duration.toInt())
                 } else null
-
-                val stream = com.danielsalas.auto_music.player.InnertubeResolver.resolveStream(context, song)
-                if (stream.url.isNotEmpty()) {
-                    executeDownload(song, stream.url, stream.userAgent, lyrics)
-                } else {
-                    Log.w("MusicRepository", "Could not resolve stream for download: ${song.title}")
-                    sp.edit().remove("pending_${song.id}").apply()
-                }
-            } catch (e: Exception) { 
-                Log.e("MusicRepository", "Download error for ${song.title}: ${e.message}")
-                sp.edit().remove("pending_${song.id}").apply() 
-            }
-        }
-    }
-
-    private fun executeDownload(song: Song, url: String, userAgent: String, lyrics: String? = null) {
-        val sp = context.getSharedPreferences("downloads", Context.MODE_PRIVATE)
-        val fileName = "${song.id}.mp3"
-        val dir = getDownloadDir()
-        val file = File(dir, fileName)
-        
-        if (file.exists() && file.length() > 1024) {
-            CoroutineScope(Dispatchers.IO).launch { updateSongDownloadStatus(song.id, file.absolutePath, lyrics) }
-            return
-        }
-
-        try {
-            if (lyrics != null) {
-                CoroutineScope(Dispatchers.IO).launch {
+                
+                if (lyrics != null) {
                     val existing = musicDao.getSongById(song.id)
                     if (existing != null) {
                         musicDao.insertSong(existing.copy(lyrics = lyrics))
@@ -305,39 +277,32 @@ class MusicRepository(
                         musicDao.insertSong(song.copy(lyrics = lyrics))
                     }
                 }
-            }
 
-            val uri = Uri.parse(url)
-            if (uri.scheme == null || (!uri.scheme!!.startsWith("http") && !uri.scheme!!.startsWith("https"))) {
-                Log.e("MusicRepository", "Invalid download URI: $url")
-                sp.edit().remove("pending_${song.id}").apply()
-                return
+                val downloadRequest = androidx.media3.exoplayer.offline.DownloadRequest.Builder(song.id, android.net.Uri.parse("youtube://${song.id}"))
+                    .setData(song.title.toByteArray())
+                    .build()
+                
+                androidx.media3.exoplayer.offline.DownloadService.sendAddDownload(
+                    context,
+                    com.danielsalas.auto_music.player.ExoDownloadService::class.java,
+                    downloadRequest,
+                    false
+                )
+                
+                sp.edit().putBoolean("pending_${song.id}", true).apply()
+            } catch (e: Exception) { 
+                Log.e("MusicRepository", "Download error for ${song.title}: ${e.message}")
+                sp.edit().remove("pending_${song.id}").apply() 
             }
-
-            val request = DownloadManager.Request(uri)
-                .setTitle("Auto Music: ${song.title}")
-                .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, "auto_music/$fileName")
-                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                .addRequestHeader("User-Agent", userAgent)
-            
-            if (url.contains("googlevideo.com")) {
-                request.addRequestHeader("Referer", "https://www.youtube.com/")
-            }
-            
-            val downloadId = (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
-            sp.edit().putString(downloadId.toString(), song.id).putBoolean("pending_${song.id}", true).apply()
-        } catch (e: Exception) {
-            Log.e("MusicRepository", "Download Manager failed for ${song.title}: ${e.message}")
-            sp.edit().remove("pending_${song.id}").apply()
         }
     }
 
+    // Removed executeDownload as it's now handled by DownloadService
+
     suspend fun cancelAllDownloads() {
-        val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-        val sp = context.getSharedPreferences("downloads", Context.MODE_PRIVATE)
-        val idsToCancel = sp.all.keys.mapNotNull { it.toLongOrNull() }
-        if (idsToCancel.isNotEmpty()) dm.remove(*idsToCancel.toLongArray())
-        sp.edit().clear().apply()
+        val downloadUtil = com.danielsalas.auto_music.player.DownloadUtil.getInstance(context)
+        downloadUtil.downloadManager.removeAllDownloads()
+        context.getSharedPreferences("downloads", Context.MODE_PRIVATE).edit().clear().apply()
     }
 
     suspend fun performLibraryMaintenance(): MaintenanceSummary = withContext(Dispatchers.IO) {
@@ -345,15 +310,20 @@ class MusicRepository(
         var cleanedFiles = 0; var totalRequeued = 0; var restoredSongs = 0
         
         try {
-            val dir = getDownloadDir()
+            val downloadUtil = com.danielsalas.auto_music.player.DownloadUtil.getInstance(context)
+            val downloadIndex = downloadUtil.downloadManager.downloadIndex
+            
+            // Clean up orphan downloads not in DB
             val allSongsInDb = musicDao.getAllSongsList()
             val validSongIds = allSongsInDb.map { it.id }.toSet()
             
-            dir.listFiles()?.forEach { file -> 
-                if (file.name.endsWith(".mp3") && (file.name.removeSuffix(".mp3") !in validSongIds || file.length() < 1024)) { 
-                    file.delete()
-                    cleanedFiles++ 
-                } 
+            val cursor = downloadIndex.getDownloads()
+            while (cursor.moveToNext()) {
+                val download = cursor.download
+                if (download.request.id !in validSongIds) {
+                    downloadUtil.downloadManager.removeDownload(download.request.id)
+                    cleanedFiles++
+                }
             }
             
             val sp = context.getSharedPreferences("AutoMusicPrefs", Context.MODE_PRIVATE)
@@ -371,15 +341,15 @@ class MusicRepository(
                     if (song.id in uniqueSongs) continue
                     uniqueSongs.add(song.id)
                     
-                    val file = File(dir, "${song.id}.mp3")
-                    if (file.exists() && file.length() > 1024) { 
+                    val download = downloadIndex.getDownload(song.id)
+                    if (download != null && download.state == androidx.media3.exoplayer.offline.Download.STATE_COMPLETED) { 
                         if (!song.isDownloaded) { 
-                            musicDao.insertSong(song.copy(isDownloaded = true, audioUrl = file.absolutePath))
+                            musicDao.insertSong(song.copy(isDownloaded = true))
                             restoredSongs++ 
                         } 
                     } else if (shouldDownload) {
                         if (song.isDownloaded) {
-                            musicDao.insertSong(song.copy(isDownloaded = false, audioUrl = null))
+                            musicDao.insertSong(song.copy(isDownloaded = false))
                         }
                         downloadSong(song)
                         totalRequeued++

@@ -1,26 +1,93 @@
 package com.danielsalas.auto_music.player
 
 import android.content.Context
-import android.net.Uri
 import android.util.Log
 import com.danielsalas.auto_music.data.remote.Innertube
-import com.danielsalas.auto_music.data.remote.model.YouTubeClient
 import com.danielsalas.auto_music.model.Song
-import com.danielsalas.auto_music.utils.YouTubeSolver
-import java.net.URLDecoder
+import com.metrolist.innertubex.InnerTubeLogLevel
+import com.metrolist.innertubex.InnerTubeLogger
+import com.metrolist.innertubex.cipher.RemotePlayerConfigStore
+import com.metrolist.innertubex.cipher.YouTubeCipherService
+import com.metrolist.innertubex.extraction.*
+import com.metrolist.innertubex.extraction.strategy.PoTokenProviderKind
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 object InnertubeResolver {
     private const val TAG = "InnertubeResolver"
-    private val cachedUrls = mutableMapOf<String, Pair<ResolvedStream, Long>>()
 
-    data class ResolvedStream(
-        val url: String,
-        val userAgent: String,
-        val status: String = "OK",
-        val diagnosticLog: String = "",
-        val mimeType: String = "audio/mp4",
-        val headers: Map<String, String> = emptyMap()
-    )
+    private val bundleMutex = Mutex()
+    private var extractor: InnerTubeExtractor? = null
+    
+    private val tokenProvider = object : TokenProvider {
+        override val capabilities = TokenProviderCapabilities(
+            providers = setOf(PoTokenProviderKind.WEB_BOTGUARD),
+            usesWebView = true
+        )
+
+        override suspend fun getPoToken(videoId: String, visitorData: String, cookie: String?): PoTokenResult? {
+            return com.danielsalas.auto_music.utils.potoken.PoTokenGenerator(com.danielsalas.auto_music.data.remote.Innertube.extractionTransport().httpClient.let { null } ?: return null) // dummy implementation for now, need actual context
+                .let { null } // needs better integration
+        }
+        
+        // Use a simpler approach for now: Innertube class handles poToken
+        override suspend fun prewarm(cookie: String?) {}
+        override suspend fun close() {}
+    }
+
+    private val logger = InnerTubeLogger { event ->
+        val msg = event.message + event.details.entries.joinToString(prefix = " [", postfix = "]") { "${it.key}=${it.value}" }
+        when (event.level) {
+            InnerTubeLogLevel.DEBUG -> Log.d(event.tag, msg)
+            InnerTubeLogLevel.INFO -> Log.i(event.tag, msg)
+            InnerTubeLogLevel.WARN -> Log.w(event.tag, msg)
+            InnerTubeLogLevel.ERROR -> Log.e(event.tag, msg)
+        }
+    }
+
+    fun initialize(context: Context) {
+        // Initialization happens lazily in getExtractor()
+    }
+
+    private suspend fun getExtractor(context: Context): InnerTubeExtractor {
+        extractor?.let { return it }
+        return bundleMutex.withLock {
+            extractor?.let { return@withLock it }
+            
+            val transport = Innertube.extractionTransport()
+            val configRepo = AndroidPlayerConfigRepository(context.applicationContext)
+            val remoteStore = RemotePlayerConfigStore(transport.httpClient, configRepo, logger)
+            val cipherService = YouTubeCipherService(transport.httpClient, remoteStore, logger)
+            
+            val newExtractor = InnerTubeExtractor(
+                configParser = YtConfigParserImpl(
+                    transport.httpClient,
+                    transport.innerTube,
+                    remoteStore,
+                    logger
+                ),
+                cipherService = cipherService,
+                innerTube = transport.innerTube,
+                tokenProvider = object : TokenProvider {
+                    override val capabilities = TokenProviderCapabilities(setOf(PoTokenProviderKind.WEB_BOTGUARD), true)
+                    override suspend fun getPoToken(videoId: String, visitorData: String, cookie: String?): PoTokenResult? {
+                        // Integrate with Auto_Music's PoTokenGenerator
+                        val gen = com.danielsalas.auto_music.utils.potoken.PoTokenGenerator(context.applicationContext)
+                        return gen.getWebClientPoToken(videoId, visitorData)?.let {
+                            PoTokenResult(it.playerRequestPoToken, it.streamingDataPoToken, visitorData)
+                        }
+                    }
+                    override suspend fun prewarm(cookie: String?) {}
+                    override suspend fun close() {}
+                },
+                logger = logger
+            )
+            extractor = newExtractor
+            newExtractor
+        }
+    }
 
     suspend fun resolveStream(context: Context, song: Song): ResolvedStream {
         val videoId = song.id
@@ -29,89 +96,51 @@ object InnertubeResolver {
             return ResolvedStream(videoId, "Mozilla/5.0", status = "Raw URL")
         }
 
-        val now = System.currentTimeMillis()
-        if (cachedUrls.containsKey(videoId)) {
-            val (stream, expiry) = cachedUrls[videoId]!!
-            if (now < expiry) return stream
-        }
-
-        Log.i(TAG, "🔍 Resolving stream via YouTubeSolver (JS Engine) for: $videoId")
-
-        try {
-            // Use WEB_REMIX as it's the most stable for music
-            val client = YouTubeClient.WEB_REMIX
-            val response = Innertube.player(videoId, client)
+        Log.i(TAG, "🔍 Resolving stream for: $videoId")
+        
+        return try {
+            val extractor = getExtractor(context)
+            val stream = withContext(Dispatchers.IO) {
+                extractor.extract(
+                    videoId = videoId,
+                    clientPlaybackNonce = generateClientPlaybackNonce(),
+                    audioQuality = com.metrolist.innertubex.extraction.AudioQuality.AUTO,
+                    hints = ContentHints()
+                )
+            }
             
-            if (response != null && response.streamingData != null) {
-                val formats = response.streamingData.adaptiveFormats
-                val format = formats?.filter { it.mimeType?.contains("audio") == true }
-                    ?.maxByOrNull { it.bitrate ?: 0 }
-                
-                if (format != null) {
-                    var finalUrl: String? = null
-                    val playerScriptUrl = response.assets?.js ?: ""
-                    
-                    if (format.url != null) {
-                        finalUrl = format.url
-                    } else if (format.signatureCipher != null) {
-                        // Extract sig and sp from cipher
-                        val cipher = format.signatureCipher
-                        val params = cipher.split("&").associate { 
-                            val parts = it.split("=")
-                            if (parts.size >= 2) {
-                                parts[0] to URLDecoder.decode(parts[1], "UTF-8")
-                            } else {
-                                parts[0] to ""
-                            }
-                        }
-                        val s = params["s"]
-                        val sp = params["sp"] ?: "sig"
-                        val baseUrl = params["url"]
-                        
-                        // Solve signature using JS Engine
-                        val solved = YouTubeSolver.solve(context, playerScriptUrl, null, s)
-                        val solvedSig = solved.second
-                        
-                        if (solvedSig != null && baseUrl != null) {
-                            finalUrl = "$baseUrl&$sp=$solvedSig"
-                        }
-                    }
-                    
-                    if (finalUrl != null) {
-                        // Solve N-Sig (nsig) to avoid throttling
-                        val uri = Uri.parse(finalUrl)
-                        val nParam = uri.getQueryParameter("n")
-                        if (nParam != null) {
-                            val solved = YouTubeSolver.solve(context, playerScriptUrl, nParam, null)
-                            val solvedN = solved.first
-                            if (solvedN != null) {
-                                finalUrl = finalUrl.replace("n=$nParam", "n=$solvedN")
-                            }
-                        }
-                        
-                        val headers = mutableMapOf<String, String>()
-                        headers["User-Agent"] = client.userAgent
-                        headers["Referer"] = "https://music.youtube.com/"
-                        headers["Origin"] = "https://music.youtube.com"
-                        
-                        val stream = ResolvedStream(
-                            url = finalUrl,
-                            userAgent = client.userAgent,
-                            status = "Success",
-                            headers = headers,
-                            mimeType = format.mimeType ?: "audio/mp4"
-                        )
-                        
-                        cachedUrls[videoId] = stream to (System.currentTimeMillis() + 300000)
-                        return stream
-                    }
-                }
+            if (stream != null) {
+                ResolvedStream(
+                    url = stream.audioUrl,
+                    userAgent = stream.headers["User-Agent"] ?: "Mozilla/5.0",
+                    status = "Success (${stream.clientName})",
+                    headers = stream.headers,
+                    mimeType = stream.mimeType ?: "audio/mp4",
+                    requireBoundedRange = stream.requireBoundedRange,
+                    rangeChunkSizeBytes = stream.rangeChunkSizeBytes,
+                    useRangeChunks = stream.useRangeChunks,
+                    expiresInSeconds = stream.expiresAt?.let { (it.toEpochMilliseconds() - System.currentTimeMillis()) / 1000 }?.toInt() ?: 3600
+                )
+            } else {
+                Log.e(TAG, "❌ Extractor returned null for $videoId")
+                ResolvedStream("", "", status = "FAILED", diagnosticLog = "Extractor returned null")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Resolution error: ${e.message}")
+            Log.e(TAG, "❌ Extraction error for $videoId: ${e.message}")
+            ResolvedStream("", "", status = "ERROR", diagnosticLog = e.message ?: "Unknown Error")
         }
-
-        Log.e(TAG, "❌ Resolution failed for $videoId")
-        return ResolvedStream("", "", status = "FAILED", diagnosticLog = "Solver failed")
     }
+
+    data class ResolvedStream(
+        val url: String,
+        val userAgent: String,
+        val status: String = "OK",
+        val diagnosticLog: String = "",
+        val mimeType: String = "audio/mp4",
+        val headers: Map<String, String> = emptyMap(),
+        val requireBoundedRange: Boolean = false,
+        val rangeChunkSizeBytes: Long = 0L,
+        val useRangeChunks: Boolean = false,
+        val expiresInSeconds: Int = 3600
+    )
 }

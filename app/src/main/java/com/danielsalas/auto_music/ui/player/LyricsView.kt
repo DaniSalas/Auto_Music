@@ -68,7 +68,7 @@ fun LyricsView(
                         fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
                         lineHeight = 32.sp
                     ),
-                    color = if (isActive) Color.White else Color.White.copy(alpha = 0.5f),
+                    color = if (isActive) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                     textAlign = TextAlign.Center
                 )
             }

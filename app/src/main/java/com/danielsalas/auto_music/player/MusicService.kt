@@ -1,22 +1,13 @@
 package com.danielsalas.auto_music.player
 
-import android.app.DownloadManager
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.net.Uri
 import android.os.Bundle
-import android.os.Environment
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.common.*
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.datasource.DefaultHttpDataSource
-import androidx.media3.datasource.ResolvingDataSource
-import androidx.media3.datasource.cache.CacheDataSink
-import androidx.media3.datasource.cache.CacheDataSource
-import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.*
@@ -24,7 +15,6 @@ import com.danielsalas.auto_music.data.MusicRepository
 import com.danielsalas.auto_music.data.local.MusicDatabase
 import com.danielsalas.auto_music.data.remote.YouTubeService
 import com.danielsalas.auto_music.model.Song
-import com.danielsalas.auto_music.player.cache.PlayerCache
 import com.danielsalas.auto_music.player.effects.CustomEqualizerAudioProcessor
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
@@ -32,19 +22,13 @@ import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.SettableFuture
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import okhttp3.OkHttpClient
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import java.io.File
 import java.util.concurrent.TimeUnit
 import androidx.core.net.toUri
-import androidx.core.content.ContextCompat
 import android.media.audiofx.LoudnessEnhancer
-import android.media.audiofx.Equalizer
-import android.media.audiofx.PresetReverb
-import android.media.audiofx.EnvironmentalReverb
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.DefaultRenderersFactory
@@ -57,136 +41,18 @@ class MusicService : MediaLibraryService() {
     private lateinit var repository: MusicRepository
     private val serviceJob = SupervisorJob()
     private val serviceScope = CoroutineScope(Dispatchers.Main + serviceJob)
-    private lateinit var cache: SimpleCache
     
     private val softwareEqualizer = CustomEqualizerAudioProcessor()
     private var loudnessEnhancer: LoudnessEnhancer? = null
     private var currentAudioSessionId: Int = 0
 
-    private val resolutionCache = mutableMapOf<String, Pair<InnertubeResolver.ResolvedStream, Long>>()
-    private val resolutionMutex = Mutex()
-
     private fun createDataSourceFactory(): androidx.media3.datasource.DataSource.Factory {
-        val httpDataSourceFactory = DefaultHttpDataSource.Factory()
-            .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(15000)
-            .setReadTimeoutMs(20000)
-        
-        val defaultDataSourceFactory = androidx.media3.datasource.DefaultDataSource.Factory(this, httpDataSourceFactory)
-        
-        val resolvingDataSourceFactory = ResolvingDataSource.Factory(defaultDataSourceFactory) { dataSpec ->
-            val uriString = dataSpec.uri.toString()
-            
-            if (uriString.startsWith("http") && !uriString.contains("youtube.com/watch") && !uriString.contains("music.youtube.com/watch")) {
-                return@Factory dataSpec
-            }
-            
-            if (uriString.startsWith("file") || uriString.startsWith("content")) {
-                return@Factory dataSpec
-            }
-            
-            val videoId = when {
-                uriString.startsWith("youtube://") -> uriString.removePrefix("youtube://")
-                uriString.contains("v=") -> uriString.substringAfter("v=").substringBefore("&")
-                uriString.contains("music.youtube.com/watch?v=") -> uriString.substringAfter("v=").substringBefore("&")
-                else -> dataSpec.key ?: ""
-            }
-            
-            if (videoId.isBlank()) return@Factory dataSpec
-            
-            // Try local file first
-            val localFile = File(getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "auto_music/$videoId.mp3")
-            if (localFile.exists() && localFile.length() > 1024) {
-                return@Factory dataSpec.withUri(Uri.fromFile(localFile))
-            }
-
-            // Cache check
-            val now = System.currentTimeMillis()
-            resolutionCache[videoId]?.let { (cached, expiry) ->
-                if (now < expiry) return@Factory dataSpec.withUri(Uri.parse(cached.url)).withRequestHeaders(cached.headers)
-            }
-            
-            // Resolve online stream
-            val stream = try { 
-                runBlocking(Dispatchers.IO) { 
-                    val song = repository.getSongById(videoId) ?: Song(id = videoId, title = "Unknown", artist = "Unknown", thumbnailUrl = "")
-                    InnertubeResolver.resolveStream(this@MusicService, song) 
-                } 
-            } catch (e: Exception) { 
-                Log.e("MusicService", "Stream resolution crash for $videoId: ${e.message}")
-                InnertubeResolver.ResolvedStream("", "", status = "CRASH", diagnosticLog = e.message ?: "Unknown Error")
-            }
-            
-            if (stream.url.isNotEmpty()) {
-                resolutionCache[videoId] = stream to (now + 300000) 
-                val headers = dataSpec.httpRequestHeaders.toMutableMap()
-                headers.putAll(stream.headers)
-                
-                // Add essential browser headers if not present
-                if (!headers.containsKey("User-Agent")) {
-                    headers["User-Agent"] = stream.userAgent.ifEmpty { "Mozilla/5.0" }
-                }
-                
-                // Metrolist style: force Range to start stream immediately and avoid 403 on some clients
-                if (!headers.containsKey("Range")) {
-                    headers["Range"] = "bytes=0-"
-                }
-                
-                Log.d("MusicService", "Playing stream: $videoId | Source: ${stream.status}")
-                return@Factory dataSpec.withUri(Uri.parse(stream.url)).withRequestHeaders(headers)
-            }
-            
-            val errorMsg = stream.diagnosticLog.ifEmpty { stream.status }
-            Log.e("MusicService", "Resolution failed for $videoId: $errorMsg")
-            
-            serviceScope.launch(Dispatchers.Main) {
-                mediaSession?.broadcastCustomCommand(
-                    SessionCommand("PLAYBACK_ERROR", Bundle.EMPTY),
-                    Bundle().apply { 
-                        putString("error", errorMsg)
-                        putString("videoId", videoId)
-                    }
-                )
-            }
-            
-            dataSpec.withUri(Uri.parse("error://resolution_failed?msg=${Uri.encode(errorMsg)}"))
-        }
-        
-        return CacheDataSource.Factory()
-            .setCache(cache)
-            .setUpstreamDataSourceFactory(resolvingDataSourceFactory)
-            .setCacheWriteDataSinkFactory(CacheDataSink.Factory().setCache(cache).setFragmentSize(1024 * 1024))
-            .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
-    }
-
-    private val downloadReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            val id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L)
-            if (id != -1L) {
-                val songId = context.getSharedPreferences("downloads", Context.MODE_PRIVATE).getString(id.toString(), null) ?: return
-                val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-                val cursor = downloadManager.query(DownloadManager.Query().setFilterById(id))
-                if (cursor != null && cursor.moveToFirst()) {
-                    val statusIdx = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
-                    if (statusIdx != -1) {
-                        val status = cursor.getInt(statusIdx)
-                        if (status == DownloadManager.STATUS_SUCCESSFUL) {
-                            val dir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
-                            val file = File(dir, "auto_music/$songId.mp3")
-                            if (file.exists()) serviceScope.launch { repository.updateSongDownloadStatus(songId, file.absolutePath) }
-                        }
-                    }
-                    cursor.close()
-                }
-                context.getSharedPreferences("downloads", Context.MODE_PRIVATE).edit().remove("pending_$songId").apply()
-            }
-        }
+        return DownloadUtil.getInstance(this).dataSourceFactory
     }
 
     override fun onCreate() {
         super.onCreate()
         serviceScope.launch { com.danielsalas.auto_music.data.remote.Innertube.fetchVisitorData() }
-        cache = PlayerCache.getInstance(applicationContext)
         val database = MusicDatabase.getDatabase(applicationContext)
         val okHttpClient = OkHttpClient.Builder().connectTimeout(30, TimeUnit.SECONDS).build()
         val retrofit = Retrofit.Builder().baseUrl("https://www.youtube.com/").client(okHttpClient).addConverterFactory(GsonConverterFactory.create()).build()
@@ -223,6 +89,38 @@ class MusicService : MediaLibraryService() {
                         serviceScope.launch { applyPlaylistEffects(repository.getPlaylistById(playlistId)) }
                         serviceScope.launch { repository.updatePlaylistPlaybackState(playlistId, songId, 0L) }
                     }
+                    
+                    // Fetch lyrics on the fly if missing
+                    if (item.mediaMetadata.extras?.getString("lyrics") == null) {
+                        serviceScope.launch {
+                            try {
+                                val duration = (item.mediaMetadata.extras?.getLong("android.media.metadata.DURATION") ?: 0L) / 1000
+                                val lyrics = com.danielsalas.auto_music.api.lrclib.LrcLib.getLyrics(
+                                    item.mediaMetadata.title?.toString() ?: "",
+                                    item.mediaMetadata.artist?.toString() ?: "",
+                                    duration.toInt()
+                                )
+                                if (lyrics != null) {
+                                    val updatedExtras = (item.mediaMetadata.extras ?: Bundle()).apply {
+                                        putString("lyrics", lyrics)
+                                    }
+                                    val updatedMetadata = item.mediaMetadata.buildUpon()
+                                        .setExtras(updatedExtras)
+                                        .build()
+                                    val updatedItem = item.buildUpon().setMediaMetadata(updatedMetadata).build()
+                                    
+                                    player?.let { p ->
+                                        if (p.currentMediaItem?.mediaId == item.mediaId) {
+                                            p.replaceMediaItem(p.currentMediaItemIndex, updatedItem)
+                                        }
+                                    }
+                                    repository.updateLyrics(songId, lyrics)
+                                }
+                            } catch (e: Exception) {
+                                Log.w("MusicService", "Failed to fetch lyrics on transition: ${e.message}")
+                            }
+                        }
+                    }
                 }
             }
         })
@@ -245,8 +143,6 @@ class MusicService : MediaLibraryService() {
         val intent = Intent(this, com.danielsalas.auto_music.MainActivity::class.java)
         val pendingIntent = android.app.PendingIntent.getActivity(this, 0, intent, android.app.PendingIntent.FLAG_IMMUTABLE)
         mediaSession = MediaLibrarySession.Builder(this, newPlayer, LibrarySessionCallback()).setSessionActivity(pendingIntent).build()
-        
-        ContextCompat.registerReceiver(this, downloadReceiver, IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE), ContextCompat.RECEIVER_EXPORTED)
     }
 
     private fun setupAudioEffects(sessionId: Int) {
@@ -261,9 +157,6 @@ class MusicService : MediaLibraryService() {
         val normalize = playlist?.isVolumeNormalized ?: false
         try {
             loudnessEnhancer?.let { 
-                // 2500 mB = +25 dB (too aggressive and might clip/distort or fail on some decoders). 
-                // Standard ReplayGain / Loudness normalization target: +6dB to +12dB (600 to 1200 mB) or automatic boost.
-                // Let's use 1000 mB (+10 dB) or 1200 mB for balanced perceived loudness normalization.
                 it.setTargetGain(if (normalize) 1200 else 0)
                 it.enabled = normalize
                 Log.d("MusicService", "Playlist normalization applied: $normalize (targetGain: ${if (normalize) 1200 else 0})")
@@ -368,20 +261,32 @@ class MusicService : MediaLibraryService() {
         }
 
         private fun createMediaItem(song: com.danielsalas.auto_music.model.Song, playlistId: Long?): MediaItem {
-            val isLocal = song.isDownloaded && song.audioUrl != null && File(song.audioUrl).exists()
-            val uri = if (isLocal) Uri.fromFile(File(song.audioUrl)).toString() else "youtube://${song.id}"
+            val isLocal = song.isDownloaded
+            val uri = "youtube://${song.id}"
             
-            val mimeType = when {
-                isLocal -> "audio/mpeg"
-                uri.contains(".m3u8") -> "application/x-mpegURL"
-                uri.contains(".mpd") -> "application/dash+xml"
-                else -> "audio/mp4"
+            val extras = Bundle().apply {
+                if (playlistId != null) putString("playlistId", playlistId.toString())
+                putLong("android.media.metadata.DURATION", song.duration * 1000L)
+                putString("album", song.album)
+                song.lyrics?.let { putString("lyrics", it) }
             }
             
-            val metadata = MediaMetadata.Builder().setTitle(song.title).setArtist(song.artist).setArtworkUri(song.thumbnailUrl.toUri()).setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
-                .setIsBrowsable(false).setIsPlayable(true)
-                .setExtras(Bundle().apply { if (playlistId != null) putString("playlistId", playlistId.toString()); putLong("android.media.metadata.DURATION", song.duration * 1000L); putString("album", song.album) }).build()
-            return MediaItem.Builder().setMediaId(if (playlistId != null) "PL$playlistId|${song.id}" else song.id).setUri(uri).setMimeType(mimeType).setMediaMetadata(metadata).build()
+            val metadata = MediaMetadata.Builder()
+                .setTitle(song.title)
+                .setArtist(song.artist)
+                .setArtworkUri(song.thumbnailUrl.toUri())
+                .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
+                .setIsBrowsable(false)
+                .setIsPlayable(true)
+                .setExtras(extras)
+                .build()
+                
+            return MediaItem.Builder()
+                .setMediaId(if (playlistId != null) "PL$playlistId|${song.id}" else song.id)
+                .setUri(uri)
+                .setMimeType("audio/mp4")
+                .setMediaMetadata(metadata)
+                .build()
         }
 
         override fun onGetLibraryRoot(session: MediaLibrarySession, browser: MediaSession.ControllerInfo, params: LibraryParams?): ListenableFuture<LibraryResult<MediaItem>> {
@@ -412,7 +317,7 @@ class MusicService : MediaLibraryService() {
     }
 
     override fun onDestroy() {
-        unregisterReceiver(downloadReceiver); mediaSession?.release(); player?.release(); serviceJob.cancel()
+        mediaSession?.release(); player?.release(); serviceJob.cancel()
         loudnessEnhancer?.release()
         super.onDestroy()
     }

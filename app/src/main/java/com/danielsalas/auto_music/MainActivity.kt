@@ -67,7 +67,7 @@ import com.danielsalas.auto_music.ui.screens.PlaylistSongsScreen
 import com.danielsalas.auto_music.ui.screens.SearchScreen
 import com.danielsalas.auto_music.ui.player.LyricsView
 import com.danielsalas.auto_music.ui.theme.Auto_MusicTheme
-import com.danielsalas.auto_music.utils.YouTubeSolver
+
 import androidx.compose.animation.*
 import com.google.common.util.concurrent.MoreExecutors
 import kotlinx.coroutines.CoroutineScope
@@ -93,6 +93,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         
         com.danielsalas.auto_music.data.remote.Innertube.initPoToken(this)
+        com.danielsalas.auto_music.player.InnertubeResolver.initialize(this)
         
         val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             arrayOf(android.Manifest.permission.READ_MEDIA_AUDIO, android.Manifest.permission.POST_NOTIFICATIONS)
@@ -187,9 +188,14 @@ fun MainApp(
         if (controller == null) return@DisposableEffect onDispose {}
         val listener = object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
-                if (statusMessage == null || statusMessage!!.startsWith("Resolving") || !statusMessage!!.contains(":")) {
-                    statusMessage = "Player Error: ${error.errorCodeName} (${error.errorCode})"
+                val cause = error.cause
+                val extraInfo = when (cause) {
+                    is androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException -> ": HTTP ${cause.responseCode}"
+                    is androidx.media3.datasource.HttpDataSource.HttpDataSourceException -> ": IO Error"
+                    else -> if (cause != null) ": ${cause.message}" else ""
                 }
+                
+                statusMessage = "Player Error: ${error.errorCodeName} (${error.errorCode})$extraInfo"
             }
             override fun onMediaMetadataChanged(metadata: MediaMetadata) {
                 val error = metadata.extras?.getString("playback_error")
@@ -268,6 +274,7 @@ fun MainApp(
                             controller = c, 
                             isExpanded = isPlayerExpanded,
                             statusMessage = statusMessage,
+                            autoShowLyrics = downloadLyrics,
                             onToggleExpand = { isPlayerExpanded = !isPlayerExpanded },
                             onAlbumClick = { q ->
                                 isPlayerExpanded = false
@@ -385,15 +392,29 @@ fun playSong(song: Song, controller: MediaController?, playlistId: Long?, status
 
 @OptIn(UnstableApi::class)
 @Composable
-fun MiniPlayer(controller: MediaController, isExpanded: Boolean, statusMessage: String? = null, onToggleExpand: () -> Unit, onAlbumClick: (String) -> Unit) {
+fun MiniPlayer(controller: MediaController, isExpanded: Boolean, statusMessage: String? = null, autoShowLyrics: Boolean = true, onToggleExpand: () -> Unit, onAlbumClick: (String) -> Unit) {
     var metadata by remember { mutableStateOf(controller.mediaMetadata) }
     var isPlaying by remember { mutableStateOf(controller.isPlaying) }
     var position by remember { mutableLongStateOf(controller.currentPosition) }
     var duration by remember { mutableLongStateOf(controller.duration) }
     var playerError by remember { mutableStateOf<String?>(null) }
-    var showLyrics by remember { mutableStateOf(false) }
+    var showLyrics by remember { mutableStateOf(autoShowLyrics) }
 
     val lyrics = metadata.extras?.getString("lyrics")
+    
+    // Si cambia la canción y tenemos autoShowLyrics activo, volvemos a mostrar la letra
+    LaunchedEffect(metadata.title, autoShowLyrics) {
+        if (autoShowLyrics) {
+            showLyrics = true
+        }
+    }
+    
+    // Si el usuario expande el reproductor y la opción está activa, asegurar que se vea la letra
+    LaunchedEffect(isExpanded) {
+        if (isExpanded && autoShowLyrics) {
+            showLyrics = true
+        }
+    }
 
     DisposableEffect(controller) {
         val listener = object : Player.Listener {
@@ -417,7 +438,7 @@ fun MiniPlayer(controller: MediaController, isExpanded: Boolean, statusMessage: 
     LaunchedEffect(isPlaying) {
         while (isPlaying) {
             position = controller.currentPosition
-            delay(1000)
+            delay(200)
         }
     }
 
@@ -437,14 +458,12 @@ fun MiniPlayer(controller: MediaController, isExpanded: Boolean, statusMessage: 
                 Column(modifier = Modifier.padding(24.dp).fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                         IconButton(onClick = onToggleExpand) { Icon(Icons.Default.KeyboardArrowDown, null) }
-                        if (lyrics != null) {
-                            IconButton(onClick = { showLyrics = !showLyrics }) { 
-                                Icon(
-                                    imageVector = Icons.Default.FormatQuote, 
-                                    contentDescription = null,
-                                    tint = if (showLyrics) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                                ) 
-                            }
+                        IconButton(onClick = { showLyrics = !showLyrics }) { 
+                            Icon(
+                                imageVector = Icons.Default.FormatQuote, 
+                                contentDescription = null,
+                                tint = if (showLyrics) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                            ) 
                         }
                     }
 
@@ -454,7 +473,7 @@ fun MiniPlayer(controller: MediaController, isExpanded: Boolean, statusMessage: 
                         modifier = Modifier.weight(1f),
                         label = "LyricsAnim"
                     ) { lyricsEnabled ->
-                        if (lyricsEnabled && lyrics != null) {
+                        if (lyricsEnabled) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
@@ -463,12 +482,12 @@ fun MiniPlayer(controller: MediaController, isExpanded: Boolean, statusMessage: 
                                     AsyncImage(
                                         model = metadata.artworkUri, 
                                         contentDescription = null, 
-                                        modifier = Modifier.size(120.dp).clip(RoundedCornerShape(12.dp)).shadow(8.dp, RoundedCornerShape(12.dp)), 
+                                        modifier = Modifier.size(80.dp).clip(RoundedCornerShape(8.dp)).shadow(4.dp, RoundedCornerShape(8.dp)), 
                                         contentScale = ContentScale.Crop
                                     )
                                     Column(modifier = Modifier.padding(start = 16.dp).weight(1f)) {
-                                        Text(metadata.title?.toString() ?: "No Title", style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        Text(metadata.artist?.toString() ?: "Unknown", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+                                        Text(metadata.title?.toString() ?: "No Title", style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text(metadata.artist?.toString() ?: "Unknown", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                                     }
                                 }
                                 LyricsView(lyrics = lyrics, currentPositionMs = position)

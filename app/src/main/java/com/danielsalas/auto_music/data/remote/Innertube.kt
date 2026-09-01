@@ -3,23 +3,28 @@ package com.danielsalas.auto_music.data.remote
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.engine.okhttp.OkHttp
+import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.plugins.compression.*
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.json.*
 import android.util.Log
-import com.danielsalas.auto_music.data.remote.model.PlayerResponse
 import com.danielsalas.auto_music.data.remote.model.YouTubeClient
 import com.danielsalas.auto_music.utils.potoken.PoTokenGenerator
 import java.util.concurrent.TimeUnit
 import okhttp3.ConnectionPool
 import okhttp3.Protocol
+import java.io.File
+import com.metrolist.innertubex.InnerTube as InnerTubeX
+import com.metrolist.innertubex.models.YouTubeClient as LibYouTubeClient
 
 object InnertubeConstants {
     const val YOUTUBE_MUSIC_URL = "https://music.youtube.com"
-    const val YOUTUBE_URL = "https://www.youtube.com"
+    const val YOUTUBE_URL = "https://www.youtube"
 }
 
 object Innertube {
@@ -31,20 +36,46 @@ object Innertube {
     }
 
     val client = HttpClient(OkHttp) {
+        expectSuccess = false
         install(ContentNegotiation) { json(json) }
+        install(ContentEncoding) {
+            gzip(0.9F)
+            deflate(0.8F)
+        }
         engine {
             config {
                 connectionPool(ConnectionPool(10, 5, TimeUnit.MINUTES))
-                connectTimeout(8, TimeUnit.SECONDS)
-                readTimeout(10, TimeUnit.SECONDS)
-                writeTimeout(8, TimeUnit.SECONDS)
+                connectTimeout(30, TimeUnit.SECONDS)
+                readTimeout(60, TimeUnit.SECONDS)
+                writeTimeout(60, TimeUnit.SECONDS)
                 protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
                 retryOnConnectionFailure(true)
             }
         }
+        install(HttpTimeout) {
+            requestTimeoutMillis = 60_000
+            connectTimeoutMillis = 30_000
+            socketTimeoutMillis = 60_000
+        }
+        defaultRequest {
+            url("https://music.youtube.com/youtubei/v1/")
+            header("Accept", "application/json")
+            header("Cache-Control", "no-cache")
+        }
     }
 
-    var visitorData: String? = "CgtuekFiRnJlRGdRRSip0crUBjIoCgJFUxIiEh4SHAsMDg8QERITFBUWFxgZGhscHR4fICEiIyQlJicgamLgAgrdAjE3LllURT1uQ0RuUi1Mc3FyYnlnWEg2TExtRHlrUnpDY29Ba3dmYlZEdEpVdm9ONlBjSVljZUZ2c0ZTQkRGWk5STFZyMkpBYVZxWnBrR1VuZlJNTWpsY01fMGhqV2VFNXVHRGVFcWowMVZ2MnBOYWI0M0FqX0tpVmhKdWhvNW9KNjViSHpSLTVoVDIxRG9kMENFbUlqdURmYlVnVF93QXZBMDhLVUxzamVZcEZtcEJvR2xaSjBOZUNyNzNfdlpiSHpZZ1Fzel9DQnpDYUR0VVpPdUFVcDFrWEZPcGFIbDV3N0NtU0UxeWNodDNWcjJ6dlU4bFhyUmprRjc4Z0U5YTIxbjdBUk5tRkNjMC14MFZSbXpaX0wzMEYya192blZhZ0lhYWJYMHhJcDFOVmluQkxJY21fWjRWM1l2SGhyUzh5aFFPS2o0MFBwck1aLU9sOTZKTUI1NWl1bTRfN2c%3D"
+    private val innerTubeX = InnerTubeX(client)
+    private var transportGeneration = 0L
+
+    class ExtractionTransport(
+        val innerTube: InnerTubeX,
+        val httpClient: HttpClient,
+        val generation: Long,
+    )
+
+    var visitorData: String?
+        get() = innerTubeX.visitorData
+        set(value) { innerTubeX.visitorData = value }
 
     private var poTokenGenerator: PoTokenGenerator? = null
     
@@ -56,117 +87,68 @@ object Innertube {
 
     suspend fun fetchVisitorData() {
         try {
-            val response = client.get("${InnertubeConstants.YOUTUBE_URL}/?theme=true") {
-                userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
-            }
-            val text = response.bodyAsText()
-            Regex("ytcfg\\.set\\(\\{.*?\"VISITOR_DATA\":\"(.*?)\"").find(text)?.groupValues?.get(1)?.let {
-                visitorData = it
-                Log.i("Innertube", "Updated visitorData: $it")
-            }
+            innerTubeX.fetchFreshVisitorData()
         } catch (e: Exception) { 
             Log.w("Innertube", "fetchVisitorData failed: ${e.message}") 
         }
     }
 
     suspend fun search(query: String, params: String? = null): InnerTubeResponse? {
-        if (visitorData == null) fetchVisitorData()
         return try {
-            val clientType = YouTubeClient.WEB_REMIX
-            val context = clientType.toContext(visitorData)
-            
-            val response = client.post("${InnertubeConstants.YOUTUBE_MUSIC_URL}/youtubei/v1/search") {
-                contentType(ContentType.Application.Json)
-                header("X-YouTube-Client-Name", clientType.clientId)
-                header("X-YouTube-Client-Version", clientType.clientVersion)
-                header("X-Goog-Api-Key", clientType.apiKey)
-                visitorData?.let { header("X-Goog-Visitor-Id", it) }
-                userAgent(clientType.userAgent)
-                parameter("key", clientType.apiKey)
-                
-                setBody(SearchBody(
-                    query = query, 
-                    context = context,
-                    params = params ?: "EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D"
-                ))
-            }
+            val response = innerTubeX.search(
+                client = LibYouTubeClient.WEB_REMIX,
+                query = query,
+                params = params ?: "EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D"
+            )
             if (response.status.value !in 200..299) return null
-            try {
-                json.decodeFromString<InnerTubeResponse>(response.bodyAsText())
-            } catch (e: Exception) {
-                Log.e("Innertube", "Search decode error: ${e.message}")
-                null
-            }
-        } catch (e: Exception) { null }
+            response.body<InnerTubeResponse>()
+        } catch (e: Exception) {
+            Log.e("Innertube", "Search error: ${e.message}")
+            null
+        }
     }
 
     suspend fun browse(browseId: String): InnerTubeResponse? {
-        if (visitorData == null) fetchVisitorData()
         return try {
-            val clientType = YouTubeClient.WEB_REMIX
-            val context = clientType.toContext(visitorData)
-            val response = client.post("${InnertubeConstants.YOUTUBE_MUSIC_URL}/youtubei/v1/browse") {
-                contentType(ContentType.Application.Json)
-                header("X-YouTube-Client-Name", clientType.clientId)
-                header("X-YouTube-Client-Version", clientType.clientVersion)
-                header("X-Goog-Api-Key", clientType.apiKey)
-                userAgent(clientType.userAgent)
-                parameter("key", clientType.apiKey)
-                setBody(BrowseBody(browseId = browseId, context = context))
-            }
+            val response = innerTubeX.browse(
+                client = LibYouTubeClient.WEB_REMIX,
+                browseId = browseId
+            )
             if (response.status.value !in 200..299) return null
-            try {
-                json.decodeFromString<InnerTubeResponse>(response.bodyAsText())
-            } catch (e: Exception) {
-                Log.e("Innertube", "Browse decode error: ${e.message}")
-                null
-            }
-        } catch (e: Exception) { null }
+            response.body<InnerTubeResponse>()
+        } catch (e: Exception) {
+            Log.e("Innertube", "Browse error: ${e.message}")
+            null
+        }
     }
 
-    suspend fun player(videoId: String, clientType: YouTubeClient): PlayerResponse? {
+    // Keep the manual player call for now as a fallback, or replace it if library's player works well
+    suspend fun player(videoId: String, clientType: YouTubeClient): com.danielsalas.auto_music.data.remote.model.PlayerResponse? {
         return try {
             val tokens = poTokenGenerator?.getWebClientPoToken(videoId, visitorData ?: "")
             
-            val context = clientType.toContext(visitorData, tokens?.playerRequestPoToken)
-            val body = PlayerBody(
-                context = context,
+            val libClient = when (clientType.clientName) {
+                "WEB_REMIX" -> LibYouTubeClient.WEB_REMIX
+                "TVHTML5_SIMPLY_EMBEDDED_PLAYER" -> LibYouTubeClient.TVHTML5_SIMPLY_EMBEDDED_PLAYER
+                "MWEB" -> LibYouTubeClient.MWEB
+                else -> LibYouTubeClient.WEB_REMIX
+            }
+
+            val response = innerTubeX.player(
+                client = libClient,
                 videoId = videoId,
-                playbackContext = PlayerBody.PlaybackContext(
-                    PlayerBody.PlaybackContext.ContentPlaybackContext(signatureTimestamp = 20695)
-                ),
+                playlistId = null,
+                signatureTimestamp = 20710,
                 poToken = tokens?.streamingDataPoToken
             )
             
-            val baseUrl = if (clientType.isMusic) InnertubeConstants.YOUTUBE_MUSIC_URL else InnertubeConstants.YOUTUBE_URL
-            val response = client.post("${baseUrl}/youtubei/v1/player") {
-                contentType(ContentType.Application.Json)
-                header("X-Goog-Api-Format-Version", "2")
-                header("X-YouTube-Client-Name", clientType.clientId)
-                header("X-YouTube-Client-Version", clientType.clientVersion)
-                header("X-Goog-Api-Key", clientType.apiKey)
-                visitorData?.let { header("X-Goog-Visitor-Id", it) }
-                
-                if (clientType.isMusic) {
-                    header("Referer", "https://music.youtube.com/")
-                } else {
-                    header("Referer", "https://www.youtube.com/watch?v=$videoId")
-                }
-                
-                userAgent(clientType.userAgent)
-                parameter("key", clientType.apiKey)
-                setBody(body)
-            }
             if (response.status.value !in 200..299) return null
-            try {
-                json.decodeFromString<PlayerResponse>(response.bodyAsText())
-            } catch (e: Exception) {
-                Log.e("Innertube", "Player decode error: ${e.message}")
-                null
-            }
+            response.body<com.danielsalas.auto_music.data.remote.model.PlayerResponse>()
         } catch (e: Exception) { 
             Log.e("Innertube", "Player error: ${e.message}")
             null 
         }
     }
+    
+    fun extractionTransport() = ExtractionTransport(innerTubeX, client, transportGeneration)
 }

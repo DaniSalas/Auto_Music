@@ -2,22 +2,26 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
-    kotlin("plugin.serialization") version "2.2.10"
+    alias(libs.plugins.kotlin.serialization)
     id("com.google.gms.google-services") version "4.5.0"
 }
 
 android {
     namespace = "com.danielsalas.auto_music"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.danielsalas.auto_music"
         minSdk = 26
-        targetSdk = 36
+        targetSdk = 34
         versionCode = 3
         versionName = "3.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        
+        ndk {
+            abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64"))
+        }
     }
 
     compileOptions {
@@ -62,6 +66,7 @@ dependencies {
     implementation(libs.media3.exoplayer.hls)
     implementation(libs.media3.session)
     implementation(libs.media3.ui)
+    implementation("androidx.media3:media3-datasource-okhttp:1.5.1")
 
     // Room
     implementation(libs.room.runtime)
@@ -74,25 +79,27 @@ dependencies {
     implementation(libs.okhttp)
     
     // Ktor (for kreate_imp architecture emulation)
-    implementation("io.ktor:ktor-client-core:2.3.12")
-    implementation("io.ktor:ktor-client-okhttp:2.3.12")
-    implementation("io.ktor:ktor-client-content-negotiation:2.3.12")
-    implementation("io.ktor:ktor-serialization-kotlinx-json:2.3.12")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
+    implementation(libs.ktor.client.core)
+    implementation(libs.ktor.client.okhttp)
+    implementation(libs.ktor.client.content.negotiation)
+    implementation("io.ktor:ktor-client-encoding:3.5.2")
+    implementation("org.brotli:dec:0.1.2")
+    implementation(libs.ktor.serialization.kotlinx.json)
+    implementation(libs.kotlinx.serialization.json)
 
     // Coil
     implementation(libs.coil.compose)
 
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.10.1")
+    implementation(libs.kotlinx.coroutines.play.services)
 
     // Firebase for syncing
     implementation(platform("com.google.firebase:firebase-bom:33.9.0"))
     implementation("com.google.firebase:firebase-database-ktx")
 
-    // JavaScript Engine for YouTube Solver
-    implementation("app.cash.quickjs:quickjs-android:0.9.2")
+    // InnerTubeX (Metrolist engine)
+    implementation("com.github.MetrolistGroup.innertubex:innertubex-android:v0.2.6")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

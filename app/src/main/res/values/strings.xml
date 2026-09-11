@@ -1,6 +1,8 @@
 <resources>
     <string name="app_name">Auto_Music</string>
     <string name="downloading">Downloading…</string>
+    <string name="download_channel_name">Downloads</string>
+    <string name="download_channel_description">Shows the progress of music downloads</string>
     <string name="download_failed">Download failed</string>
     <plurals name="n_song">
         <item quantity="one">%d song</item>

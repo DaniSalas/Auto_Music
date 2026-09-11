@@ -4,8 +4,10 @@ import android.content.Context
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.datasource.cache.Cache
+import androidx.media3.datasource.cache.CacheDataSink
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.offline.Download
@@ -29,39 +31,72 @@ class DownloadUtil(private val context: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     val downloads = MutableStateFlow<Map<String, Download>>(emptyMap())
     
-    val downloadCache: Cache = PlayerCache.getDownloadCache(context)
-    val playerCache: Cache = PlayerCache.getInstance(context)
-    val databaseProvider = PlayerCache.getDatabaseProvider(context)
-    private val musicDao = com.danielsalas.auto_music.data.local.MusicDatabase.getDatabase(context).musicDao()
+    // Use lazy for anything that touches files/DB to avoid constructor crashes
+    val downloadCache: Cache by lazy { PlayerCache.getDownloadCache(context) }
+    val playerCache: Cache by lazy { PlayerCache.getInstance(context) }
+    val databaseProvider by lazy { PlayerCache.getDatabaseProvider(context) }
+    private val musicDao by lazy { com.danielsalas.auto_music.data.local.MusicDatabase.getDatabase(context).musicDao() }
     
     private val songUrlCache = StreamUrlCache()
     private val streamHttpClient = OkHttpClient.Builder().build()
     
-    val dataSourceFactory = ResolvingDataSource.Factory(
-        CacheDataSource.Factory()
-            .setCache(playerCache) // Use playerCache for intermediate caching
-            .setUpstreamDataSourceFactory(OkHttpDataSource.Factory(streamHttpClient))
-            .setCacheWriteDataSinkFactory(null) 
-    ) { dataSpec ->
-        val mediaId = if (dataSpec.key != null && !dataSpec.key!!.contains("http")) {
-            dataSpec.key!!.substringAfter("|")
+    // Factory for the DownloadManager - MUST write to downloadCache
+    val downloadDataSourceFactory: DataSource.Factory by lazy {
+        ResolvingDataSource.Factory(
+            CacheDataSource.Factory()
+                .setCache(downloadCache)
+                .setUpstreamDataSourceFactory(OkHttpDataSource.Factory(streamHttpClient))
+                .setCacheWriteDataSinkFactory(CacheDataSink.Factory().setCache(downloadCache))
+        ) { dataSpec ->
+            resolveDataSpec(dataSpec)
+        }
+    }
+
+    // Factory for regular playback - Should check downloadCache first, then use playerCache
+    val dataSourceFactory: DataSource.Factory by lazy {
+        DataSource.Factory {
+            val upstreamFactory = OkHttpDataSource.Factory(streamHttpClient)
+            
+            val playerCacheFactory = CacheDataSource.Factory()
+                .setCache(playerCache)
+                .setUpstreamDataSourceFactory(upstreamFactory)
+                
+            val downloadCacheFactory = CacheDataSource.Factory()
+                .setCache(downloadCache)
+                .setUpstreamDataSourceFactory(playerCacheFactory)
+                .setCacheWriteDataSinkFactory(null) 
+                
+            ResolvingDataSource(downloadCacheFactory.createDataSource()) { dataSpec ->
+                resolveDataSpec(dataSpec)
+            }
+        }
+    }
+
+    private fun resolveDataSpec(dataSpec: androidx.media3.datasource.DataSpec): androidx.media3.datasource.DataSpec {
+        val uriString = dataSpec.uri.toString()
+        val mediaId = if (uriString.startsWith("youtube://")) {
+            uriString.removePrefix("youtube://")
         } else {
-            val uriString = dataSpec.uri.toString()
-            if (uriString.startsWith("youtube://")) {
-                uriString.removePrefix("youtube://")
+            // If it's not our scheme, check if we have a key that looks like an ID
+            val key = dataSpec.key
+            if (key != null && !key.contains("http") && !key.contains("/")) {
+                key.substringAfter("|")
             } else {
-                return@Factory dataSpec
+                return dataSpec
             }
         }
         
-        // Check playerCache first
-        if (playerCache.isCached(mediaId, dataSpec.position, if (dataSpec.length >= 0) dataSpec.length else 1)) {
-            return@Factory dataSpec
+        // IMPORTANT: We MUST have a stable cache key (the song ID) 
+        // to find the song in the download cache even if the URL changes.
+        val fixedDataSpec = if (dataSpec.key == null) {
+            dataSpec.buildUpon().setKey(mediaId).build()
+        } else {
+            dataSpec
         }
-
+        
         // Check our URL cache
         songUrlCache[mediaId]?.let { cachedStream ->
-            return@Factory dataSpec.withResolvedStream(cachedStream)
+            return fixedDataSpec.withResolvedStream(cachedStream)
         }
         
         val cacheGeneration = songUrlCache.generation(mediaId)
@@ -73,10 +108,12 @@ class DownloadUtil(private val context: Context) {
                 InnertubeResolver.resolveStream(context, song)
             }
         } catch (e: Exception) {
-            throw IOException("Resolution failed for $mediaId: ${e.message}")
+            Log.e("DownloadUtil", "Resolution failed for $mediaId: ${e.message}")
+            return fixedDataSpec 
         }
         
         if (stream.url.isNotEmpty()) {
+            Log.d("DownloadUtil", "Resolved URL for $mediaId: ${stream.url.take(50)}...")
             val cached = CachedStreamUrl(
                 url = stream.url,
                 requestHeaders = stream.headers,
@@ -99,72 +136,134 @@ class DownloadUtil(private val context: Context) {
                 expectedGeneration = cacheGeneration
             )
             
-            dataSpec.withResolvedStream(cached)
+            return fixedDataSpec.withResolvedStream(cached)
         } else {
-            throw IOException("Resolution returned empty URL for $mediaId: ${stream.diagnosticLog}")
+            return fixedDataSpec
         }
     }
 
-    val downloadNotificationHelper = DownloadNotificationHelper(context, ExoDownloadService.CHANNEL_ID)
+    val downloadNotificationHelper by lazy { DownloadNotificationHelper(context, ExoDownloadService.CHANNEL_ID) }
 
-    val downloadManager: DownloadManager = DownloadManager(
-        context,
-        databaseProvider,
-        downloadCache,
-        dataSourceFactory,
-        Executor { it.run() }
-    ).apply {
-        maxParallelDownloads = 3
-        requirements = androidx.media3.exoplayer.scheduler.Requirements(androidx.media3.exoplayer.scheduler.Requirements.NETWORK)
-        addListener(object : DownloadManager.Listener {
-            override fun onDownloadChanged(downloadManager: DownloadManager, download: Download, finalException: Exception?) {
-                downloads.update { it.toMutableMap().apply { put(download.request.id, download) } }
-                
-                if (download.state == Download.STATE_COMPLETED) {
+    val downloadManager: DownloadManager by lazy {
+        DownloadManager(
+            context,
+            databaseProvider,
+            downloadCache,
+            downloadDataSourceFactory,
+            Executor { it.run() }
+        ).apply {
+            maxParallelDownloads = 6 // Aumentado para descargas masivas
+            requirements = androidx.media3.exoplayer.scheduler.Requirements(0) 
+            
+            addListener(object : DownloadManager.Listener {
+                override fun onInitialized(downloadManager: DownloadManager) {
+                    val count = try { downloadManager.downloadIndex.getDownloads().count } catch (e: Exception) { -1 }
+                    Log.d("DownloadUtil", "DownloadManager Initialized. Items in index: $count")
+                    downloadManager.resumeDownloads()
+                }
+
+                override fun onDownloadChanged(downloadManager: DownloadManager, download: Download, finalException: Exception?) {
+                    Log.d("DownloadUtil", "Download ${download.request.id} -> ${getStateString(download.state)} (${download.percentDownloaded}%)")
+                    downloads.update { it.toMutableMap().apply { put(download.request.id, download) } }
+                    
+                    if (download.state == Download.STATE_COMPLETED) {
+                        scope.launch(Dispatchers.IO) {
+                            try {
+                                val song = musicDao.getSongById(download.request.id)
+                                if (song != null) {
+                                    musicDao.insertSong(song.copy(isDownloaded = true))
+                                    Log.i("DownloadUtil", "✅ Descarga completada y guardada: ${song.title}")
+                                }
+                            } catch (e: Exception) {
+                                Log.e("DownloadUtil", "Error al actualizar DB: ${e.message}")
+                            }
+                        }
+                    } else if (download.state == Download.STATE_FAILED) {
+                        Log.e("DownloadUtil", "❌ Error en descarga: ${download.request.id}, error: ${finalException?.message}")
+                        if (isExpiredStreamError(finalException)) {
+                            songUrlCache.invalidate(download.request.id)
+                        }
+                    }
+                }
+
+                override fun onDownloadRemoved(downloadManager: DownloadManager, download: Download) {
+                    downloads.update { it.toMutableMap().apply { remove(download.request.id) } }
                     scope.launch {
                         val song = musicDao.getSongById(download.request.id)
                         if (song != null) {
-                            musicDao.insertSong(song.copy(isDownloaded = true))
+                            musicDao.insertSong(song.copy(isDownloaded = false))
                         }
-                        context.getSharedPreferences("downloads", Context.MODE_PRIVATE).edit().remove("pending_${download.request.id}").apply()
-                    }
-                } else if (download.state == Download.STATE_FAILED) {
-                    context.getSharedPreferences("downloads", Context.MODE_PRIVATE).edit().remove("pending_${download.request.id}").apply()
-                    if (finalException is androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException && (finalException.responseCode == 403 || finalException.responseCode == 410)) {
-                        songUrlCache.invalidate(download.request.id)
                     }
                 }
-            }
+            })
+            resumeDownloads()
+        }
+    }
 
-            override fun onDownloadRemoved(downloadManager: DownloadManager, download: Download) {
-                downloads.update { it.toMutableMap().apply { remove(download.request.id) } }
-                scope.launch {
-                    val song = musicDao.getSongById(download.request.id)
-                    if (song != null) {
-                        musicDao.insertSong(song.copy(isDownloaded = false))
-                    }
+    private fun isExpiredStreamError(throwable: Throwable?): Boolean {
+        var current = throwable
+        while (current != null) {
+            if (current is androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException) {
+                if (current.responseCode == 403 || current.responseCode == 410 || current.responseCode == 416) {
+                    return true
                 }
             }
-        })
+            if (current.message?.contains("403") == true || current.message?.contains("410") == true || current.message?.contains("416") == true) {
+                return true
+            }
+            current = current.cause
+        }
+        return false
+    }
+
+    private fun getStateString(state: Int): String = when(state) {
+        Download.STATE_QUEUED -> "QUEUED"
+        Download.STATE_DOWNLOADING -> "DOWNLOADING"
+        Download.STATE_COMPLETED -> "COMPLETED"
+        Download.STATE_FAILED -> "FAILED"
+        Download.STATE_REMOVING -> "REMOVING"
+        Download.STATE_RESTARTING -> "RESTARTING"
+        Download.STATE_STOPPED -> "STOPPED"
+        else -> "UNKNOWN"
     }
 
     init {
-        val result = mutableMapOf<String, Download>()
-        val cursor = downloadManager.downloadIndex.getDownloads()
-        while (cursor.moveToNext()) {
-            result[cursor.download.request.id] = cursor.download
+        // Run index loading on a background thread but don't block constructor
+        scope.launch(Dispatchers.IO) {
+            try {
+                val result = mutableMapOf<String, Download>()
+                val cursor = downloadManager.downloadIndex.getDownloads()
+                while (cursor.moveToNext()) {
+                    result[cursor.download.request.id] = cursor.download
+                }
+                downloads.value = result
+                Log.d("DownloadUtil", "Init loaded ${result.size} downloads from index")
+            } catch (e: Exception) {
+                Log.e("DownloadUtil", "Error loading download index: ${e.message}")
+            }
         }
-        downloads.value = result
     }
 
     companion object {
+        private const val TAG = "DownloadUtil"
         @Volatile
         private var INSTANCE: DownloadUtil? = null
 
         fun getInstance(context: Context): DownloadUtil {
             return INSTANCE ?: synchronized(this) {
-                INSTANCE ?: DownloadUtil(context.applicationContext).also { INSTANCE = it }
+                INSTANCE ?: try {
+                    DownloadUtil(context.applicationContext).also { INSTANCE = it }
+                } catch (e: Exception) {
+                    Log.e(TAG, "FATAL: Failed to create DownloadUtil: ${e.message}")
+                    // Create a dummy instance or rethrow if it's too critical
+                    // For now, rethrow so we can see the crash in logs if possible
+                    throw e
+                }
             }
+        }
+
+        fun reset() {
+            // Keep this for now just in case, but usually not needed with fixed folder
         }
     }
 }

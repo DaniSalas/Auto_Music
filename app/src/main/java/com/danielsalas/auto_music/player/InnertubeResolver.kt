@@ -21,22 +21,6 @@ object InnertubeResolver {
     private val bundleMutex = Mutex()
     private var extractor: InnerTubeExtractor? = null
     
-    private val tokenProvider = object : TokenProvider {
-        override val capabilities = TokenProviderCapabilities(
-            providers = setOf(PoTokenProviderKind.WEB_BOTGUARD),
-            usesWebView = true
-        )
-
-        override suspend fun getPoToken(videoId: String, visitorData: String, cookie: String?): PoTokenResult? {
-            return com.danielsalas.auto_music.utils.potoken.PoTokenGenerator(com.danielsalas.auto_music.data.remote.Innertube.extractionTransport().httpClient.let { null } ?: return null) // dummy implementation for now, need actual context
-                .let { null } // needs better integration
-        }
-        
-        // Use a simpler approach for now: Innertube class handles poToken
-        override suspend fun prewarm(cookie: String?) {}
-        override suspend fun close() {}
-    }
-
     private val logger = InnerTubeLogger { event ->
         val msg = event.message + event.details.entries.joinToString(prefix = " [", postfix = "]") { "${it.key}=${it.value}" }
         when (event.level) {
@@ -89,16 +73,16 @@ object InnertubeResolver {
         }
     }
 
-    suspend fun resolveStream(context: Context, song: Song): ResolvedStream {
+    suspend fun resolveStream(context: Context, song: Song, allowFallback: Boolean = true): ResolvedStream {
         val videoId = song.id
         
         if (videoId.startsWith("http") || videoId.startsWith("content") || videoId.startsWith("file")) {
             return ResolvedStream(videoId, "Mozilla/5.0", status = "Raw URL")
         }
 
-        Log.i(TAG, "🔍 Resolving stream for: $videoId")
+        Log.i(TAG, "🔍 Resolving stream for: $videoId (${song.title})")
         
-        return try {
+        val result = try {
             val extractor = getExtractor(context)
             val stream = withContext(Dispatchers.IO) {
                 extractor.extract(
@@ -129,6 +113,31 @@ object InnertubeResolver {
             Log.e(TAG, "❌ Extraction error for $videoId: ${e.message}")
             ResolvedStream("", "", status = "ERROR", diagnosticLog = e.message ?: "Unknown Error")
         }
+
+        // If extraction failed and we allow fallback, try to search for the song again
+        if (result.url.isEmpty() && allowFallback && song.title.isNotEmpty() && song.title != "Unknown") {
+            Log.w(TAG, "⚠️ Fallback: Trying to find a working version for '${song.title}'")
+            try {
+                val searchQuery = if (song.artist != "Unknown") "${song.title} ${song.artist}" else song.title
+                val response = Innertube.search(searchQuery)
+                val newVideoId = response?.contents?.tabbedSearchResultsRenderer?.tabs?.firstOrNull()?.tabRenderer?.content?.sectionListRenderer?.contents
+                    ?.firstNotNullOfOrNull { section ->
+                        section.musicShelfRenderer?.contents?.firstNotNullOfOrNull { item ->
+                            item.musicResponsiveListItemRenderer?.navigationEndpoint?.watchEndpoint?.videoId
+                        }
+                    }
+                
+                if (newVideoId != null && newVideoId != videoId) {
+                    Log.i(TAG, "🔄 Found alternative videoId: $newVideoId. Retrying resolution...")
+                    val fallbackResult = resolveStream(context, song.copy(id = newVideoId), allowFallback = false)
+                    return fallbackResult.copy(resolvedVideoId = newVideoId)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Fallback search failed: ${e.message}")
+            }
+        }
+
+        return result
     }
 
     data class ResolvedStream(
@@ -141,6 +150,7 @@ object InnertubeResolver {
         val requireBoundedRange: Boolean = false,
         val rangeChunkSizeBytes: Long = 0L,
         val useRangeChunks: Boolean = false,
-        val expiresInSeconds: Int = 3600
+        val expiresInSeconds: Int = 3600,
+        val resolvedVideoId: String? = null
     )
 }

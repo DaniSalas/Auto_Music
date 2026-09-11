@@ -52,97 +52,102 @@ class MusicService : MediaLibraryService() {
 
     override fun onCreate() {
         super.onCreate()
-        serviceScope.launch { com.danielsalas.auto_music.data.remote.Innertube.fetchVisitorData() }
-        val database = MusicDatabase.getDatabase(applicationContext)
-        val okHttpClient = OkHttpClient.Builder().connectTimeout(30, TimeUnit.SECONDS).build()
-        val retrofit = Retrofit.Builder().baseUrl("https://www.youtube.com/").client(okHttpClient).addConverterFactory(GsonConverterFactory.create()).build()
-        repository = MusicRepository(database.musicDao(), retrofit.create(YouTubeService::class.java), applicationContext)
+        try {
+            serviceScope.launch { com.danielsalas.auto_music.data.remote.Innertube.fetchVisitorData() }
+            val database = MusicDatabase.getDatabase(applicationContext)
+            val okHttpClient = OkHttpClient.Builder().connectTimeout(30, TimeUnit.SECONDS).build()
+            val retrofit = Retrofit.Builder().baseUrl("https://www.youtube.com/").client(okHttpClient).addConverterFactory(GsonConverterFactory.create()).build()
+            repository = MusicRepository(database.musicDao(), retrofit.create(YouTubeService::class.java), applicationContext)
 
-        val audioSink = DefaultAudioSink.Builder(this)
-            .setAudioProcessors(arrayOf(softwareEqualizer))
-            .build()
-        
-        val renderersFactory = object : DefaultRenderersFactory(this) {
-            override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioTrackPlaybackParams: Boolean): AudioSink = audioSink
-        }
-
-        val newPlayer = ExoPlayer.Builder(this, renderersFactory)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(this).setDataSourceFactory(createDataSourceFactory()))
-            .setAudioAttributes(AudioAttributes.Builder().setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).setUsage(C.USAGE_MEDIA).build(), true)
-            .setHandleAudioBecomingNoisy(true).build()
-        
-        newPlayer.repeatMode = Player.REPEAT_MODE_ALL
-        newPlayer.addListener(object : Player.Listener {
-            override fun onAudioSessionIdChanged(audioSessionId: Int) {
-                if (currentAudioSessionId != audioSessionId) {
-                    currentAudioSessionId = audioSessionId
-                    setupAudioEffects(audioSessionId)
-                }
+            val audioSink = DefaultAudioSink.Builder(this)
+                .setAudioProcessors(arrayOf(softwareEqualizer))
+                .build()
+            
+            val renderersFactory = object : DefaultRenderersFactory(this) {
+                override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioTrackPlaybackParams: Boolean): AudioSink = audioSink
             }
-            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                mediaItem?.let { item ->
-                    val mId = item.mediaId
-                    if (mId == "RESUME_ROOT" || mId.startsWith("RESUME_PL")) return@let
-                    val playlistId = if (mId.contains("|")) mId.substringBefore("|").removePrefix("PL").toLongOrNull() else null
-                    val songId = if (mId.contains("|")) mId.substringAfter("|") else mId
-                    if (playlistId != null) {
-                        serviceScope.launch { applyPlaylistEffects(repository.getPlaylistById(playlistId)) }
-                        serviceScope.launch { repository.updatePlaylistPlaybackState(playlistId, songId, 0L) }
+
+            val newPlayer = ExoPlayer.Builder(this, renderersFactory)
+                .setMediaSourceFactory(DefaultMediaSourceFactory(this).setDataSourceFactory(createDataSourceFactory()))
+                .setAudioAttributes(AudioAttributes.Builder().setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).setUsage(C.USAGE_MEDIA).build(), true)
+                .setHandleAudioBecomingNoisy(true).build()
+            
+            newPlayer.repeatMode = Player.REPEAT_MODE_ALL
+            newPlayer.addListener(object : Player.Listener {
+                override fun onAudioSessionIdChanged(audioSessionId: Int) {
+                    if (currentAudioSessionId != audioSessionId) {
+                        currentAudioSessionId = audioSessionId
+                        setupAudioEffects(audioSessionId)
                     }
-                    
-                    // Fetch lyrics on the fly if missing
-                    if (item.mediaMetadata.extras?.getString("lyrics") == null) {
-                        serviceScope.launch {
-                            try {
-                                val duration = (item.mediaMetadata.extras?.getLong("android.media.metadata.DURATION") ?: 0L) / 1000
-                                val lyrics = com.danielsalas.auto_music.api.lrclib.LrcLib.getLyrics(
-                                    item.mediaMetadata.title?.toString() ?: "",
-                                    item.mediaMetadata.artist?.toString() ?: "",
-                                    duration.toInt()
-                                )
-                                if (lyrics != null) {
-                                    val updatedExtras = (item.mediaMetadata.extras ?: Bundle()).apply {
-                                        putString("lyrics", lyrics)
-                                    }
-                                    val updatedMetadata = item.mediaMetadata.buildUpon()
-                                        .setExtras(updatedExtras)
-                                        .build()
-                                    val updatedItem = item.buildUpon().setMediaMetadata(updatedMetadata).build()
-                                    
-                                    player?.let { p ->
-                                        if (p.currentMediaItem?.mediaId == item.mediaId) {
-                                            p.replaceMediaItem(p.currentMediaItemIndex, updatedItem)
+                }
+                override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                    mediaItem?.let { item ->
+                        val mId = item.mediaId
+                        if (mId == "RESUME_ROOT" || mId.startsWith("RESUME_PL")) return@let
+                        val playlistId = if (mId.contains("|")) mId.substringBefore("|").removePrefix("PL").toLongOrNull() else null
+                        val songId = if (mId.contains("|")) mId.substringAfter("|") else mId
+                        if (playlistId != null) {
+                            serviceScope.launch { applyPlaylistEffects(repository.getPlaylistById(playlistId)) }
+                            serviceScope.launch { repository.updatePlaylistPlaybackState(playlistId, songId, 0L) }
+                        }
+                        
+                        // Fetch lyrics on the fly if missing
+                        if (item.mediaMetadata.extras?.getString("lyrics") == null) {
+                            serviceScope.launch {
+                                try {
+                                    val duration = (item.mediaMetadata.extras?.getLong("android.media.metadata.DURATION") ?: 0L) / 1000
+                                    val lyrics = com.danielsalas.auto_music.api.lrclib.LrcLib.getLyrics(
+                                        item.mediaMetadata.title?.toString() ?: "",
+                                        item.mediaMetadata.artist?.toString() ?: "",
+                                        duration.toInt()
+                                    )
+                                    if (lyrics != null) {
+                                        val updatedExtras = (item.mediaMetadata.extras ?: Bundle()).apply {
+                                            putString("lyrics", lyrics)
                                         }
+                                        val updatedMetadata = item.mediaMetadata.buildUpon()
+                                            .setExtras(updatedExtras)
+                                            .build()
+                                        val updatedItem = item.buildUpon().setMediaMetadata(updatedMetadata).build()
+                                        
+                                        player?.let { p ->
+                                            if (p.currentMediaItem?.mediaId == item.mediaId) {
+                                                p.replaceMediaItem(p.currentMediaItemIndex, updatedItem)
+                                            }
+                                        }
+                                        repository.updateLyrics(songId, lyrics)
                                     }
-                                    repository.updateLyrics(songId, lyrics)
+                                } catch (e: Exception) {
+                                    Log.w("MusicService", "Failed to fetch lyrics on transition: ${e.message}")
                                 }
-                            } catch (e: Exception) {
-                                Log.w("MusicService", "Failed to fetch lyrics on transition: ${e.message}")
                             }
                         }
                     }
                 }
-            }
-        })
-        
-        serviceScope.launch {
-            while (isActive) {
-                delay(5000)
-                if (newPlayer.isPlaying) {
-                    val item = newPlayer.currentMediaItem ?: continue
-                    val mId = item.mediaId
-                    if (mId == "RESUME_ROOT" || mId.startsWith("RESUME_PL")) continue
-                    val playlistId = if (mId.contains("|")) mId.substringBefore("|").removePrefix("PL").toLongOrNull() else null
-                    val songId = if (mId.contains("|")) mId.substringAfter("|") else mId
-                    if (playlistId != null) repository.updatePlaylistPlaybackState(playlistId, songId, newPlayer.currentPosition)
+            })
+            
+            serviceScope.launch {
+                while (isActive) {
+                    delay(5000)
+                    if (newPlayer.isPlaying) {
+                        val item = newPlayer.currentMediaItem ?: continue
+                        val mId = item.mediaId
+                        if (mId == "RESUME_ROOT" || mId.startsWith("RESUME_PL")) continue
+                        val playlistId = if (mId.contains("|")) mId.substringBefore("|").removePrefix("PL").toLongOrNull() else null
+                        val songId = if (mId.contains("|")) mId.substringAfter("|") else mId
+                        if (playlistId != null) repository.updatePlaylistPlaybackState(playlistId, songId, newPlayer.currentPosition)
+                    }
                 }
             }
-        }
 
-        player = newPlayer
-        val intent = Intent(this, com.danielsalas.auto_music.MainActivity::class.java)
-        val pendingIntent = android.app.PendingIntent.getActivity(this, 0, intent, android.app.PendingIntent.FLAG_IMMUTABLE)
-        mediaSession = MediaLibrarySession.Builder(this, newPlayer, LibrarySessionCallback()).setSessionActivity(pendingIntent).build()
+            player = newPlayer
+            val intent = Intent(this, com.danielsalas.auto_music.MainActivity::class.java)
+            val pendingIntent = android.app.PendingIntent.getActivity(this, 0, intent, android.app.PendingIntent.FLAG_IMMUTABLE)
+            mediaSession = MediaLibrarySession.Builder(this, newPlayer, LibrarySessionCallback()).setSessionActivity(pendingIntent).build()
+        } catch (e: Exception) {
+            Log.e("MusicService", "CRITICAL FAILURE in onCreate: ${e.message}")
+            stopSelf()
+        }
     }
 
     private fun setupAudioEffects(sessionId: Int) {

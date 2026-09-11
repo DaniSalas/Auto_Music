@@ -14,8 +14,8 @@ android {
         applicationId = "com.danielsalas.auto_music"
         minSdk = 26
         targetSdk = 34
-        versionCode = 5
-        versionName = "3.3.0"
+        versionCode = 7
+        versionName = "3.4.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         

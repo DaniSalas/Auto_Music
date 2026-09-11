@@ -12,9 +12,7 @@ import com.danielsalas.auto_music.data.remote.YouTubeService
 import com.danielsalas.auto_music.model.Playlist
 import com.danielsalas.auto_music.model.PlaylistSongCrossRef
 import com.danielsalas.auto_music.model.Song
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -27,6 +25,7 @@ class MusicRepository(
     private val youtubeService: YouTubeService,
     private val context: Context,
 ) {
+    private val repositoryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     val allPlaylists: Flow<List<Playlist>> = musicDao.getAllPlaylists()
     val allSongs: Flow<List<Song>> = musicDao.getAllSongs()
 
@@ -207,16 +206,22 @@ class MusicRepository(
     }
 
     suspend fun addSongToPlaylist(song: Song, playlistId: Long) {
-        val existing = musicDao.getSongById(song.id)
-        if (existing == null) musicDao.insertSong(song)
-        else if ((existing.duration == 0L && song.duration > 0) || (existing.album == null && song.album != null)) musicDao.insertSong(existing.copy(duration = song.duration, album = song.album))
-        
-        val songsInPlaylist = musicDao.getSongsInPlaylist(playlistId).first()
-        if (songsInPlaylist.none { it.id == song.id }) {
-            val maxPos = musicDao.getMaxPosition(playlistId) ?: -1
-            musicDao.insertSongToPlaylist(PlaylistSongCrossRef(playlistId, song.id, maxPos + 1))
+        try {
+            val existing = musicDao.getSongById(song.id)
+            if (existing == null) musicDao.insertSong(song)
+            else if ((existing.duration == 0L && song.duration > 0) || (existing.album == null && song.album != null)) {
+                musicDao.insertSong(existing.copy(duration = song.duration, album = song.album))
+            }
+            
+            val songsInPlaylist = musicDao.getSongsInPlaylist(playlistId).first()
+            if (songsInPlaylist.none { it.id == song.id }) {
+                val maxPos = musicDao.getMaxPosition(playlistId) ?: -1
+                musicDao.insertSongToPlaylist(PlaylistSongCrossRef(playlistId, song.id, maxPos + 1))
+            }
+            checkAndDownloadPlaylistSongs(playlistId)
+        } catch (e: Exception) {
+            Log.e("MusicRepository", "Error adding song to playlist: ${e.message}")
         }
-        checkAndDownloadPlaylistSongs(playlistId)
     }
 
     suspend fun updateSongOrder(playlistId: Long, songs: List<Song>) = musicDao.updateSongOrder(playlistId, songs.map { it.id })
@@ -249,39 +254,37 @@ class MusicRepository(
 
         val songs = musicDao.getSongsInPlaylist(playlistId).first()
         val downloadUtil = com.danielsalas.auto_music.player.DownloadUtil.getInstance(context)
+        val downloadIndex = downloadUtil.downloadManager.downloadIndex
+
         songs.forEach { song ->
-            if (!song.isDownloaded) {
+            val download = downloadIndex.getDownload(song.id)
+            Log.d("MusicRepository", "Checking download for ${song.title}: state=${download?.state ?: "NOT_IN_INDEX"}")
+            
+            if (download != null) {
+                if (download.state == androidx.media3.exoplayer.offline.Download.STATE_COMPLETED) {
+                    if (!song.isDownloaded) {
+                        musicDao.insertSong(song.copy(isDownloaded = true))
+                    }
+                } else if (download.state == androidx.media3.exoplayer.offline.Download.STATE_FAILED || download.state == androidx.media3.exoplayer.offline.Download.STATE_STOPPED) {
+                    downloadSong(song)
+                }
+            } else if (!song.isDownloaded) {
                 downloadSong(song)
             }
         }
     }
 
-    fun downloadSong(song: Song) {
+    fun downloadSong(song: Song, force: Boolean = false) {
         val sp = context.getSharedPreferences("downloads", Context.MODE_PRIVATE)
-        if (sp.contains("pending_${song.id}")) return
+        if (!force && sp.contains("pending_${song.id}")) return
         
-        val settings = context.getSharedPreferences("AutoMusicPrefs", Context.MODE_PRIVATE)
-        val downloadLyrics = settings.getBoolean("download_lyrics", true)
-
-        CoroutineScope(Dispatchers.IO).launch {
+        repositoryScope.launch {
             try {
-                val lyrics = if (downloadLyrics) {
-                    com.danielsalas.auto_music.api.lrclib.LrcLib.getLyrics(song.title, song.artist, song.duration.toInt())
-                } else null
-                
-                if (lyrics != null) {
-                    val existing = musicDao.getSongById(song.id)
-                    if (existing != null) {
-                        musicDao.insertSong(existing.copy(lyrics = lyrics))
-                    } else {
-                        musicDao.insertSong(song.copy(lyrics = lyrics))
-                    }
-                }
-
                 val downloadRequest = androidx.media3.exoplayer.offline.DownloadRequest.Builder(song.id, android.net.Uri.parse("youtube://${song.id}"))
                     .setData(song.title.toByteArray())
                     .build()
                 
+                Log.d("MusicRepository", "Sending addDownload for ${song.title} (${song.id})")
                 androidx.media3.exoplayer.offline.DownloadService.sendAddDownload(
                     context,
                     com.danielsalas.auto_music.player.ExoDownloadService::class.java,
@@ -291,10 +294,30 @@ class MusicRepository(
                 
                 sp.edit().putBoolean("pending_${song.id}", true).apply()
             } catch (e: Exception) { 
-                Log.e("MusicRepository", "Download error for ${song.title}: ${e.message}")
+                Log.e("MusicRepository", "Download triggering error for ${song.title}: ${e.message}")
                 sp.edit().remove("pending_${song.id}").apply() 
             }
         }
+    }
+
+    suspend fun downloadMissingLyrics(): Int = withContext(Dispatchers.IO) {
+        var count = 0
+        val songsMissingLyrics = musicDao.getAllSongsList().filter { it.lyrics == null }
+        Log.i("MusicRepository", "Found ${songsMissingLyrics.size} songs missing lyrics")
+        
+        songsMissingLyrics.forEach { song ->
+            try {
+                val lyrics = com.danielsalas.auto_music.api.lrclib.LrcLib.getLyrics(song.title, song.artist, song.duration.toInt())
+                if (lyrics != null) {
+                    musicDao.insertSong(song.copy(lyrics = lyrics))
+                    count++
+                    delay(500) // Avoid rate limiting
+                }
+            } catch (e: Exception) {
+                Log.w("MusicRepository", "Failed to fetch lyrics for ${song.title}: ${e.message}")
+            }
+        }
+        count
     }
 
     // Removed executeDownload as it's now handled by DownloadService
@@ -313,26 +336,34 @@ class MusicRepository(
             val downloadUtil = com.danielsalas.auto_music.player.DownloadUtil.getInstance(context)
             val downloadIndex = downloadUtil.downloadManager.downloadIndex
             
-            // Clean up orphan downloads not in DB
+            // 1. Clean up orphan downloads
             val allSongsInDb = musicDao.getAllSongsList()
             val validSongIds = allSongsInDb.map { it.id }.toSet()
             
-            val cursor = downloadIndex.getDownloads()
-            while (cursor.moveToNext()) {
-                val download = cursor.download
-                if (download.request.id !in validSongIds) {
-                    downloadUtil.downloadManager.removeDownload(download.request.id)
-                    cleanedFiles++
+            downloadIndex.getDownloads().use { cursor ->
+                while (cursor.moveToNext()) {
+                    val download = cursor.download
+                    if (download.request.id !in validSongIds) {
+                        downloadUtil.downloadManager.removeDownload(download.request.id)
+                        cleanedFiles++
+                    }
                 }
             }
             
             val sp = context.getSharedPreferences("AutoMusicPrefs", Context.MODE_PRIVATE)
+            val downloadSp = context.getSharedPreferences("downloads", Context.MODE_PRIVATE)
+            
+            // Clear pending flags to allow fresh requeueing
+            downloadSp.edit().clear().apply()
+            
             val autoDownloadPublic = sp.getBoolean("auto_download_public", true)
             val autoDownloadPrivate = sp.getBoolean("auto_download_private", true)
+            val shouldDownloadLyrics = sp.getBoolean("download_lyrics", true)
             
             val playlists = musicDao.getAllPlaylists().first()
             val uniqueSongs = mutableSetOf<String>()
             
+            // 2. Requeue missing songs FIRST
             for (playlist in playlists) {
                 val shouldDownload = if (playlist.isPublic) autoDownloadPublic else autoDownloadPrivate
                 val songsInPlaylist = musicDao.getSongsInPlaylist(playlist.id).first()
@@ -342,27 +373,51 @@ class MusicRepository(
                     uniqueSongs.add(song.id)
                     
                     val download = downloadIndex.getDownload(song.id)
-                    if (download != null && download.state == androidx.media3.exoplayer.offline.Download.STATE_COMPLETED) { 
-                        if (!song.isDownloaded) { 
-                            musicDao.insertSong(song.copy(isDownloaded = true))
-                            restoredSongs++ 
-                        } 
-                    } else if (shouldDownload) {
-                        if (song.isDownloaded) {
-                            musicDao.insertSong(song.copy(isDownloaded = false))
+                    if (download != null) {
+                        if (download.state == androidx.media3.exoplayer.offline.Download.STATE_COMPLETED) {
+                            if (!song.isDownloaded) { 
+                                musicDao.insertSong(song.copy(isDownloaded = true))
+                                restoredSongs++ 
+                            } 
+                        } else if (download.state == androidx.media3.exoplayer.offline.Download.STATE_FAILED) {
+                            downloadSong(song, force = true)
+                            totalRequeued++
                         }
-                        downloadSong(song)
+                    } else if (shouldDownload) {
+                        if (song.isDownloaded) musicDao.insertSong(song.copy(isDownloaded = false))
+                        downloadSong(song, force = true)
                         totalRequeued++
-                        delay(200)
+                        delay(100)
                     }
                 }
             }
+
+            // 3. Identify missing lyrics
+            val songsMissingLyrics = allSongsInDb.filter { it.lyrics == null }
+            val lyricsPending = songsMissingLyrics.size
+            
+            if (shouldDownloadLyrics && lyricsPending > 0) {
+                repositoryScope.launch {
+                    Log.i("MusicRepository", "Waiting for song downloads to finish before fetching $lyricsPending lyrics...")
+                    
+                    // Wait until no active downloads
+                    while (isActive) {
+                        val activeCount = try { downloadUtil.downloadManager.currentDownloads.size } catch (e: Exception) { 0 }
+                        if (activeCount == 0) break
+                        delay(5000)
+                    }
+                    
+                    Log.i("MusicRepository", "Starting batch lyrics download...")
+                    downloadMissingLyrics()
+                }
+            }
+
+            MaintenanceSummary(cleanedFiles, totalRequeued, restoredSongs, lyricsPending, errors)
         } catch (e: Exception) {
-            Log.e("MusicRepository", "Maintenance CRASH: ${e.message}", e)
-            errors.add(MaintenanceError("Global", "Error crítico: ${e.message}"))
+            Log.e("MusicRepository", "Maintenance error: ${e.message}", e)
+            errors.add(MaintenanceError("Global", "Error: ${e.message}"))
+            MaintenanceSummary(cleanedFiles, totalRequeued, restoredSongs, 0, errors)
         }
-        
-        MaintenanceSummary(cleanedFiles, totalRequeued, restoredSongs, errors)
     }
     
     suspend fun updatePlaylistShuffle(playlistId: Long, shuffle: Boolean) {
@@ -374,5 +429,11 @@ class MusicRepository(
     }
 }
 
-data class MaintenanceSummary(val filesCleaned: Int, val songsRequeued: Int, val songsRestored: Int, val errors: List<MaintenanceError>)
+data class MaintenanceSummary(
+    val filesCleaned: Int, 
+    val songsRequeued: Int, 
+    val songsRestored: Int, 
+    val lyricsPending: Int, 
+    val errors: List<MaintenanceError>
+)
 data class MaintenanceError(val title: String, val reason: String)

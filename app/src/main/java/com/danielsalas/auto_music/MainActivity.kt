@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Brush
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
@@ -92,8 +93,17 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        com.danielsalas.auto_music.data.remote.Innertube.initPoToken(this)
-        com.danielsalas.auto_music.player.InnertubeResolver.initialize(this)
+        try {
+            com.danielsalas.auto_music.data.remote.Innertube.initPoToken(this)
+            com.danielsalas.auto_music.player.InnertubeResolver.initialize(this)
+            
+            // Pre-fetch visitor data for PoToken
+            lifecycleScope.launch {
+                com.danielsalas.auto_music.data.remote.Innertube.fetchVisitorData()
+            }
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Init error: ${e.message}")
+        }
         
         val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             arrayOf(android.Manifest.permission.READ_MEDIA_AUDIO, android.Manifest.permission.POST_NOTIFICATIONS)
@@ -110,21 +120,27 @@ class MainActivity : ComponentActivity() {
         
         val viewModel = ViewModelProvider(this, object : ViewModelProvider.Factory {
             override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
+                @Suppress("UNCHECKED_CAST")
                 return MainViewModel(repository) as T
             }
         })[MainViewModel::class.java]
 
         val sessionToken = SessionToken(this, android.content.ComponentName(this, com.danielsalas.auto_music.player.MusicService::class.java))
-        val controllerFuture = MediaController.Builder(this, sessionToken)
-            .setListener(object : MediaController.Listener {
-                override fun onCustomCommand(controller: MediaController, command: SessionCommand, args: Bundle): ListenableFuture<SessionResult> {
-                    if (command.customAction == "PLAYBACK_ERROR") {
-                        statusMessageState.value = args.getString("error")
+        val controllerFuture = try {
+             MediaController.Builder(this, sessionToken)
+                .setListener(object : MediaController.Listener {
+                    override fun onCustomCommand(controller: MediaController, command: SessionCommand, args: Bundle): ListenableFuture<SessionResult> {
+                        if (command.customAction == "PLAYBACK_ERROR") {
+                            statusMessageState.value = args.getString("error")
+                        }
+                        return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
                     }
-                    return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
-                }
-            })
-            .buildAsync()
+                })
+                .buildAsync()
+        } catch (e: Exception) {
+            Log.e("MainActivity", "MediaController build error: ${e.message}")
+            null
+        }
 
         setContent {
             var controller by remember { mutableStateOf<MediaController?>(null) }
@@ -132,10 +148,16 @@ class MainActivity : ComponentActivity() {
             var isDarkTheme by remember { mutableStateOf(sp.getBoolean("dark_mode", false)) }
             
             DisposableEffect(Unit) {
-                controllerFuture.addListener({ 
-                    try { controller = controllerFuture.get() } catch (e: Exception) { Log.e("MainActivity", "Controller error: ${e.message}") }
+                controllerFuture?.addListener({ 
+                    try { 
+                        if (controllerFuture.isDone && !controllerFuture.isCancelled) {
+                            controller = controllerFuture.get() 
+                        }
+                    } catch (e: Exception) { 
+                        Log.e("MainActivity", "Controller error: ${e.message}") 
+                    }
                 }, MoreExecutors.directExecutor())
-                onDispose { MediaController.releaseFuture(controllerFuture) }
+                onDispose { controllerFuture?.let { MediaController.releaseFuture(it) } }
             }
 
             Auto_MusicTheme(darkTheme = isDarkTheme) {
@@ -207,6 +229,13 @@ fun MainApp(
                 val error = item?.mediaMetadata?.extras?.getString("playback_error")
                 if (error != null) statusMessage = error
             }
+            override fun onPlaybackStateChanged(s: Int) {
+                if (s == Player.STATE_READY || s == Player.STATE_BUFFERING) {
+                    if (statusMessage?.startsWith("Resolving") == true) {
+                        statusMessage = null
+                    }
+                }
+            }
             override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
                 if (reason == Player.DISCONTINUITY_REASON_AUTO_TRANSITION) statusMessage = null
             }
@@ -250,10 +279,16 @@ fun MainApp(
                     selected = false, 
                     onClick = { 
                         scope.launch { 
-                            drawerState.close()
-                            isMaintenanceRunning = true
-                            maintenanceSummary = repository.performLibraryMaintenance()
-                            isMaintenanceRunning = false
+                            try {
+                                drawerState.close()
+                                isMaintenanceRunning = true
+                                maintenanceSummary = repository.performLibraryMaintenance()
+                            } catch (e: Exception) {
+                                Log.e("MainActivity", "Maintenance failed: ${e.message}")
+                                Toast.makeText(context, "Maintenance error: ${e.message}", Toast.LENGTH_LONG).show()
+                            } finally {
+                                isMaintenanceRunning = false
+                            }
                         } 
                     }, 
                     icon = { if (isMaintenanceRunning) CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp) else Icon(Icons.Default.Build, null) }
@@ -320,7 +355,7 @@ fun MainApp(
                                 maintenanceSummary = repository.performLibraryMaintenance()
                                 isMaintenanceRunning = false
                             }
-                        })
+                        }, isMaintenanceRunning = isMaintenanceRunning)
                         2 -> ConfigScreen(strings, Color(backgroundColor.toInt()), isDarkTheme, syncId, autoDownloadPrivate, autoDownloadPublic, downloadLyrics,
                             { syncId = it; sp.edit().putString("sync_id", it).apply() },
                             { onThemeChange(it); sp.edit().putBoolean("dark_mode", it).apply() },
@@ -368,6 +403,7 @@ fun MainApp(
                             Text("${strings.filesCleanedLabel}: ${maintenanceSummary!!.filesCleaned}")
                             Text("${strings.songsRequeuedLabel}: ${maintenanceSummary!!.songsRequeued}")
                             Text("${strings.songsRestoredLabel}: ${maintenanceSummary!!.songsRestored}")
+                            Text("${strings.lyricsPendingLabel}: ${maintenanceSummary!!.lyricsPending}")
                             if (maintenanceSummary!!.errors.isNotEmpty()) {
                                 Spacer(Modifier.height(8.dp))
                                 Text(strings.maintenanceErrorsTitle, color = MaterialTheme.colorScheme.error)
@@ -531,7 +567,11 @@ fun MiniPlayer(controller: MediaController, isExpanded: Boolean, statusMessage: 
                     Column {
                         val errorExtra = metadata.extras?.getString("playback_error")
                         val isResolutionLog = statusMessage?.contains(":") == true
-                        val fullError = if (isResolutionLog) statusMessage else (errorExtra ?: statusMessage)
+                        val isResolving = statusMessage?.startsWith("Resolving") == true
+                        val fullError = if (isResolving && isPlaying) null 
+                                       else if (isResolutionLog) statusMessage 
+                                       else (errorExtra ?: statusMessage)
+                        
                         if (fullError != null) {
                             Surface(
                                 color = Color.Red.copy(alpha = 0.8f),
@@ -603,7 +643,8 @@ fun ManualScreen(strings: AppTranslations, language: String) {
         
         ManualHeader(strings.manRoomTitle)
         ManualSection(strings.manRoomDesc, "")
-        Text(strings.roomNote, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(bottom = 16.dp))
+        Text(strings.roomNote, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(bottom = 8.dp))
+        Text("Nota: El consumo de datos de las Salas es mínimo y compatible con el plan gratuito de Firebase.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary, modifier = Modifier.padding(bottom = 16.dp))
         
         ManualHeader(strings.manSongsTitle)
         ManualSection(strings.manSongsDesc, "")
@@ -823,6 +864,12 @@ fun LanguageScreen(strings: AppTranslations, current: String, onSelect: (String)
 
 @Composable
 fun ConfigScreen(strings: AppTranslations, bgColor: Color, isDark: Boolean, sId: String, dlPriv: Boolean, dlPub: Boolean, dlLrc: Boolean, onSId: (String) -> Unit, onDark: (Boolean) -> Unit, onDlPriv: (Boolean) -> Unit, onDlPub: (Boolean) -> Unit, onDlLrc: (Boolean) -> Unit, onColor: (Color) -> Unit) {
+    val context = LocalContext.current
+    val sp = remember { context.getSharedPreferences("Settings", Context.MODE_PRIVATE) }
+    var downloadFolder by remember { mutableStateOf(sp.getString("download_folder_path", "Internal Storage") ?: "Internal Storage") }
+    
+    val storageDirs = context.getExternalFilesDirs(null).filterNotNull()
+
     Column(modifier = Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
         Text(strings.configTitle, style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(24.dp))
@@ -885,7 +932,9 @@ data class AppTranslations(
     val roomTitle: String, val roomCreate: String, val roomJoin: String, val roomLeave: String,
     val roomCodeLabel: String, val roomOwnerLabel: String, val roomOwnerToggle: String,
     val roomNote: String, val working: String, val manLyricsTitle: String, val manLyricsDesc: String,
-    val manRoomTitle: String, val manRoomDesc: String, val orSeparator: String
+    val manRoomTitle: String, val manRoomDesc: String, val orSeparator: String,
+    val downloadFolderLabel: String, val selectFolder: String, val defaultFolder: String,
+    val lyricsPendingLabel: String
 )
 
 fun getTranslations(lang: String): AppTranslations {
@@ -941,7 +990,9 @@ fun getTranslations(lang: String): AppTranslations {
         manLyricsDesc = "View synchronized lyrics by tapping the quote icon in the expanded player.",
         manRoomTitle = "Shared Listening",
         manRoomDesc = "Create or join a room to listen to the same music with friends in different vehicles.",
-        orSeparator = "--- OR ---"
+        orSeparator = "--- OR ---",
+        downloadFolderLabel = "Download Folder", selectFolder = "Select Folder", defaultFolder = "Default",
+        lyricsPendingLabel = "Lyrics pending download"
     )
     
     return when(lang) {
@@ -998,7 +1049,9 @@ fun getTranslations(lang: String): AppTranslations {
             manLyricsDesc = "Mira las letras sincronizadas pulsando el icono de las comillas en el reproductor expandido.",
             manRoomTitle = "Escucha Compartida",
             manRoomDesc = "Crea o únete a una sala para escuchar la misma música con amigos en diferentes vehículos.",
-            orSeparator = "--- O ---"
+            orSeparator = "--- O ---",
+            downloadFolderLabel = "Carpeta de Descargas", selectFolder = "Seleccionar Carpeta", defaultFolder = "Predeterminada",
+            lyricsPendingLabel = "Letras pendientes de descargar"
         )
         "CATALA" -> english.copy(
             search = "Buscar", playlists = "Llistes", language = "Idioma", configTitle = "Configuració",
@@ -1052,7 +1105,9 @@ fun getTranslations(lang: String): AppTranslations {
             manLyricsDesc = "Mira les lletres sincronitzades prement la icona de les cometes al reproductor expandit.",
             manRoomTitle = "Escolta Compartida",
             manRoomDesc = "Crea o uneix-te a una sala per escoltar la mateixa música amb amics en diferents vehicles.",
-            orSeparator = "--- O ---"
+            orSeparator = "--- O ---",
+            downloadFolderLabel = "Carpeta de Descàrregues", selectFolder = "Seleccionar Carpeta", defaultFolder = "Predeterminada",
+            lyricsPendingLabel = "Lletres pendents de descarregar"
         )
         "EUSKARA" -> english.copy(
             search = "Bilatu", playlists = "Zerrendak", language = "Hizkuntza", configTitle = "Konfigurazioa",
@@ -1106,7 +1161,9 @@ fun getTranslations(lang: String): AppTranslations {
             manLyricsDesc = "Ikusi letra sinkronizatuak erreproduzitzaile hedatuan komatxoen ikonoa sakatuta.",
             manRoomTitle = "Entzute Partekatua",
             manRoomDesc = "Sortu edo batu gela batera lagunekin musika bera entzuteko hainbat ibilgailutan.",
-            orSeparator = "--- EDO ---"
+            orSeparator = "--- EDO ---",
+            downloadFolderLabel = "Deskarga Karpeta", selectFolder = "Hautatu Karpeta", defaultFolder = "Lehenetsia",
+            lyricsPendingLabel = "Letrak deskargatzeko zain"
         )
         "GALEGO" -> english.copy(
             search = "Buscar", playlists = "Listas", language = "Idioma", configTitle = "Configuración",
@@ -1160,7 +1217,9 @@ fun getTranslations(lang: String): AppTranslations {
             manLyricsDesc = "Mira as letras sincronizadas premendo a icona das comiñas no reprodutor expandido.",
             manRoomTitle = "Escoita Compartida",
             manRoomDesc = "Crea o únese a una sala para escoitar a mesma música con amigos en diferentes vehículos.",
-            orSeparator = "--- OU ---"
+            orSeparator = "--- OU ---",
+            downloadFolderLabel = "Carpeta de Descargas", selectFolder = "Seleccionar Carpeta", defaultFolder = "Predeterminada",
+            lyricsPendingLabel = "Letras pendentes de descargar"
         )
         "FRANCAIS" -> english.copy(
             search = "Recherche", playlists = "Listes", language = "Langue", configTitle = "Configuration",
@@ -1173,7 +1232,9 @@ fun getTranslations(lang: String): AppTranslations {
             manLyricsDesc = "Affichez les paroles synchronisées en appuyant sur l'icône de guillemets dans le lecteur étendu.",
             manRoomTitle = "Écoute Partagée",
             manRoomDesc = "Créez ou rejoignez une salle pour écouter la même musique avec des amis dans différents véhicules.",
-            orSeparator = "--- OU ---"
+            orSeparator = "--- OU ---",
+            downloadFolderLabel = "Dossier de téléchargement", selectFolder = "Sélectionner le dossier", defaultFolder = "Par défaut",
+            lyricsPendingLabel = "Paroles en attente"
         )
         "DEUTSCH" -> english.copy(
             search = "Suche", playlists = "Listen", language = "Sprache", configTitle = "Konfiguration",
@@ -1186,7 +1247,9 @@ fun getTranslations(lang: String): AppTranslations {
             manLyricsDesc = "Zeigen Sie synchronisierte Songtexte an, indem Sie auf das Anführungszeichen-Symbol im erweiterten Player tippen.",
             manRoomTitle = "Gemeinsames Hören",
             manRoomDesc = "Erstellen Sie einen Raum oder treten Sie einem bei, um dieselbe Musik mit Freunden in verschiedenen Fahrzeugen zu hören.",
-            orSeparator = "--- ODER ---"
+            orSeparator = "--- ODER ---",
+            downloadFolderLabel = "Download-Ordner", selectFolder = "Ordner auswählen", defaultFolder = "Standard",
+            lyricsPendingLabel = "Songtexte ausstehend"
         )
         "ITALIANO" -> english.copy(
             search = "Cerca", playlists = "Playlist", language = "Lingua", configTitle = "Configurazione",
@@ -1199,7 +1262,9 @@ fun getTranslations(lang: String): AppTranslations {
             manLyricsDesc = "Visualizza i testi sincronizzati toccando l'icona delle virgolette nel player espanso.",
             manRoomTitle = "Ascolto Condiviso",
             manRoomDesc = "Crea o entra in una sala per ascoltare la stessa musica con gli amici in diversi veicoli.",
-            orSeparator = "--- O ---"
+            orSeparator = "--- O ---",
+            downloadFolderLabel = "Cartella Download", selectFolder = "Seleziona Cartella", defaultFolder = "Predefinita",
+            lyricsPendingLabel = "Testi in attesa"
         )
         "KOREAN" -> english.copy(
             search = "검색", playlists = "재생 목록", language = "언어", configTitle = "설정",
@@ -1212,7 +1277,9 @@ fun getTranslations(lang: String): AppTranslations {
             manLyricsDesc = "확장된 플레이어에서 따옴표 아이콘을 눌러 동기화된 가사를 볼 수 있습니다.",
             manRoomTitle = "공유 청취",
             manRoomDesc = "방을 만들거나 참여하여 다른 차량에 있는 친구들과 동시에 같은 음악을 들을 수 있습니다.",
-            orSeparator = "--- 또는 ---"
+            orSeparator = "--- 또는 ---",
+            downloadFolderLabel = "다운로드 폴더", selectFolder = "폴더 선택", defaultFolder = "기본값",
+            lyricsPendingLabel = "가사 대기 중"
         )
         "JAPANESE" -> english.copy(
             search = "検索", playlists = "プレイリスト", language = "言語", configTitle = "設定",
@@ -1225,7 +1292,9 @@ fun getTranslations(lang: String): AppTranslations {
             manLyricsDesc = "拡張プレーヤーの引用符アイコンをタップして、同期された歌詞を表示します。",
             manRoomTitle = "共有リスニング",
             manRoomDesc = "ルームを作成または参加して、別の車両にいる友人と同時に同じ音楽を聴くことができます。",
-            orSeparator = "--- または ---"
+            orSeparator = "--- または ---",
+            downloadFolderLabel = "ダウンロードフォルダ", selectFolder = "フォルダを選択", defaultFolder = "デフォルト",
+            lyricsPendingLabel = "歌詞のダウンロード待ち"
         )
         else -> english
     }

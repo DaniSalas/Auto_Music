@@ -7,9 +7,7 @@ import com.danielsalas.auto_music.data.remote.YouTubePlaylist
 import com.danielsalas.auto_music.model.Playlist
 import com.danielsalas.auto_music.model.Song
 import com.danielsalas.auto_music.sync.SyncManager
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
 class MainViewModel(private val repository: MusicRepository) : ViewModel() {
@@ -25,11 +23,8 @@ class MainViewModel(private val repository: MusicRepository) : ViewModel() {
     private val _isLoadingRemoteSongs = MutableStateFlow(false)
     val isLoadingRemoteSongs: StateFlow<Boolean> = _isLoadingRemoteSongs.asStateFlow()
 
-    val playlists: StateFlow<List<Playlist>> = repository.allPlaylists.let { flow ->
-        val state = MutableStateFlow<List<Playlist>>(emptyList())
-        viewModelScope.launch { flow.collect { state.value = it } }
-        state.asStateFlow()
-    }
+    val playlists: StateFlow<List<Playlist>> = repository.allPlaylists
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList<Playlist>())
 
     private var syncManager: SyncManager? = null
     fun setSyncManager(manager: SyncManager) { syncManager = manager }

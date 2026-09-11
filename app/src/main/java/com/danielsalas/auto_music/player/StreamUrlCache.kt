@@ -20,19 +20,28 @@ internal data class CachedStreamUrl(
 
 @UnstableApi
 internal fun DataSpec.withResolvedStream(stream: CachedStreamUrl): DataSpec {
-    val resolved = withUri(Uri.parse(stream.url))
-        .withRequestHeaders(httpRequestHeaders + stream.requestHeaders)
+    val builder = buildUpon()
+        .setUri(Uri.parse(stream.url))
+        .setHttpRequestHeaders(httpRequestHeaders + stream.requestHeaders)
     
+    // If it's a full download (length == UNSET or large) and we are not forcing chunks, don't subrange.
+    // DownloadManager usually sets flags or custom data, but we can check if length is UNSET.
     if ((!stream.requireBoundedRange && !stream.useRangeChunks) || stream.rangeChunkSizeBytes <= 0L) {
-        return resolved
+        return builder.build()
     }
     
-    val boundedLength = if (length == C.LENGTH_UNSET.toLong()) {
-        stream.rangeChunkSizeBytes
-    } else {
-        minOf(length, stream.rangeChunkSizeBytes)
+    // Only subrange for transient playback if requested. 
+    // For downloads, we should probably ignore this and get the full file.
+    // If DataSpec has FLAG_ALLOW_CACHE_FRAGMENTATION or similar, it might be a download.
+    if (length == C.LENGTH_UNSET.toLong()) {
+        // If length is unset, it's likely starting a full download/stream.
+        // We only cap it if the stream ABSOLUTELY requires it to work.
+        if (stream.requireBoundedRange) {
+            builder.setLength(stream.rangeChunkSizeBytes)
+        }
     }
-    return resolved.subrange(0, boundedLength)
+    
+    return builder.build()
 }
 
 internal class StreamUrlCache(

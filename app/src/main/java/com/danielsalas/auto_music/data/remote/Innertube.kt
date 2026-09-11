@@ -64,7 +64,7 @@ object Innertube {
         }
     }
 
-    private val innerTubeX = InnerTubeX(client)
+    private val innerTubeX by lazy { InnerTubeX(client) }
     private var transportGeneration = 0L
 
     class ExtractionTransport(
@@ -74,8 +74,8 @@ object Innertube {
     )
 
     var visitorData: String?
-        get() = innerTubeX.visitorData
-        set(value) { innerTubeX.visitorData = value }
+        get() = try { innerTubeX.visitorData } catch (e: Exception) { null }
+        set(value) { try { innerTubeX.visitorData = value } catch (e: Exception) {} }
 
     private var poTokenGenerator: PoTokenGenerator? = null
     

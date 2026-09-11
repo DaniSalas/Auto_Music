@@ -15,7 +15,15 @@ class PoTokenGenerator(context: Context) {
     private val TAG = "PoTokenGenerator"
     private val applicationContext = context.applicationContext
 
-    private val webViewSupported by lazy { runCatching { CookieManager.getInstance() }.isSuccess }
+    private val webViewSupported by lazy {
+        try {
+            CookieManager.getInstance()
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "WebView not supported: ${e.message}")
+            false
+        }
+    }
     private var webViewBadImpl = false 
 
     private val webPoTokenGenLock = Mutex()
